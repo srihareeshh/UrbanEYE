@@ -444,11 +444,510 @@ export function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON user_notifications(user_id, is_read);
   `);
 
-  // Auto seed realistic community data for Phase 3 & 4
+  // 15. HEI Innovation Exchange Challenges Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hei_challenges (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      ward TEXT NOT NULL,
+      department_match TEXT NOT NULL,
+      match_percentage INTEGER DEFAULT 85,
+      status TEXT DEFAULT 'open', -- 'open', 'claimed', 'in_progress', 'completed'
+      escalated_by TEXT DEFAULT 'Municipal Commissioner / ULB Triage',
+      research_brief TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 16. HEI Multidisciplinary Capstone Projects Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hei_projects (
+      id TEXT PRIMARY KEY,
+      challenge_id TEXT,
+      report_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      institution_name TEXT NOT NULL,
+      department TEXT NOT NULL,
+      faculty_lead TEXT NOT NULL,
+      faculty_email TEXT,
+      student_team_json TEXT NOT NULL, -- Array of { name, studentId, apaarId, role, hours }
+      current_stage INTEGER DEFAULT 1, -- 1: Feasibility, 2: Simulation, 3: Prototype, 4: Field Deployment
+      total_research_hours INTEGER DEFAULT 0,
+      total_field_hours INTEGER DEFAULT 0,
+      funding_goal REAL DEFAULT 250000,
+      funding_pledged REAL DEFAULT 0,
+      sdg_goals_json TEXT, -- ['SDG 6', 'SDG 11']
+      abstract TEXT,
+      status TEXT DEFAULT 'active', -- 'active', 'pilot_ready', 'deployed', 'completed'
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 17. HEI Project 4-Stage Milestones Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS hei_project_milestones (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      stage_index INTEGER NOT NULL, -- 1, 2, 3, 4
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      status TEXT DEFAULT 'pending', -- 'pending', 'in_progress', 'completed'
+      deliverables_json TEXT, -- { schematicUrl, videoUrl, githubUrl, testDataNotes, telemetryUrl }
+      research_hours INTEGER DEFAULT 30,
+      completed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES hei_projects(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 18. Student NEP 2020 Experiential Credit Registry Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS student_nep_credits (
+      id TEXT PRIMARY KEY,
+      student_name TEXT NOT NULL,
+      student_id TEXT NOT NULL,
+      apaar_id TEXT NOT NULL,
+      institution_name TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      research_hours INTEGER DEFAULT 0,
+      field_hours INTEGER DEFAULT 0,
+      credits_awarded REAL DEFAULT 4.0,
+      verification_hash TEXT NOT NULL,
+      certificate_issued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES hei_projects(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 19. CSR Grants & Corporate Pledges Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS csr_grants (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      corporate_name TEXT NOT NULL,
+      cin TEXT NOT NULL, -- Corporate Identification Number
+      csr_reg_no TEXT NOT NULL,
+      contact_person TEXT,
+      contact_email TEXT,
+      total_pledge_amount REAL NOT NULL,
+      disbursed_amount REAL DEFAULT 0,
+      status TEXT DEFAULT 'pledged', -- 'pledged', 'partially_disbursed', 'fully_disbursed'
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES hei_projects(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 20. Smart Escrow Tranche Releases Table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS csr_escrow_tranches (
+      id TEXT PRIMARY KEY,
+      grant_id TEXT NOT NULL,
+      tranche_number INTEGER NOT NULL, -- 1: 30% on Prototype, 2: 70% on Field Deployment
+      percentage REAL NOT NULL,
+      amount REAL NOT NULL,
+      trigger_condition TEXT NOT NULL,
+      status TEXT DEFAULT 'escrow_locked', -- 'escrow_locked', 'approved', 'disbursed'
+      disbursed_at DATETIME,
+      release_notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (grant_id) REFERENCES csr_grants(id) ON DELETE CASCADE
+    );
+  `);
+
+  // 21. Corporate Mentorship & Tech Transfer Tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS corporate_mentors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      company TEXT NOT NULL,
+      designation TEXT NOT NULL,
+      expertise_domain TEXT NOT NULL,
+      email TEXT NOT NULL,
+      office_hours_slot TEXT NOT NULL,
+      status TEXT DEFAULT 'available',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tech_transfer_agreements (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      corporate_partner TEXT NOT NULL,
+      municipal_partner TEXT NOT NULL,
+      agreement_type TEXT NOT NULL, -- 'Exclusive Licensing', 'Municipal Rate Contract', 'Open Pilot'
+      royalty_percentage REAL DEFAULT 2.5,
+      status TEXT DEFAULT 'in_review', -- 'drafted', 'in_review', 'signed'
+      terms_summary TEXT,
+      signed_at DATETIME,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (project_id) REFERENCES hei_projects(id) ON DELETE CASCADE
+    );
+  `);
+
+  // Auto seed realistic community & cross-stakeholder data
   seedCommunityData();
   seedInitialEngagement();
+  seedStakeholderEcosystem();
 
-  console.log('Alcheminds Database initialized successfully with Community Upvotes & Following at:', dbPath);
+  console.log('Alcheminds Database initialized successfully with Municipal, HEI & Industry models at:', dbPath);
+}
+
+export function seedStakeholderEcosystem() {
+  const heiCount = db.prepare('SELECT COUNT(*) as count FROM hei_challenges').get().count;
+  if (heiCount > 0) return; // Already seeded
+
+  console.log('🌱 Seeding cross-stakeholder demo ecosystem (Municipal -> HEI -> Industry)...');
+
+  const reports = db.prepare('SELECT id, category, description, status, civic_priority_score FROM reports').all();
+  const waterReport = reports.find(r => r.category === 'Water') || reports[0];
+  const roadReport = reports.find(r => r.category === 'Roads') || reports[1];
+  const sanitationReport = reports.find(r => r.category === 'Sanitation') || reports[2];
+
+  const now = new Date().toISOString();
+  const pastDate = new Date(Date.now() - 3 * 86400000).toISOString();
+
+  const insertChallenge = db.prepare(`
+    INSERT INTO hei_challenges (
+      id, report_id, title, description, category, severity, ward, department_match, match_percentage, status, escalated_by, research_brief, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertProject = db.prepare(`
+    INSERT INTO hei_projects (
+      id, challenge_id, report_id, title, institution_name, department, faculty_lead, faculty_email, student_team_json, current_stage, total_research_hours, total_field_hours, funding_goal, funding_pledged, sdg_goals_json, abstract, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertMilestone = db.prepare(`
+    INSERT INTO hei_project_milestones (
+      id, project_id, stage_index, title, description, status, deliverables_json, research_hours, completed_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertNepCredit = db.prepare(`
+    INSERT INTO student_nep_credits (
+      id, student_name, student_id, apaar_id, institution_name, project_id, research_hours, field_hours, credits_awarded, verification_hash, certificate_issued_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertGrant = db.prepare(`
+    INSERT INTO csr_grants (
+      id, project_id, corporate_name, cin, csr_reg_no, contact_person, contact_email, total_pledge_amount, disbursed_amount, status, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertTranche = db.prepare(`
+    INSERT INTO csr_escrow_tranches (
+      id, grant_id, tranche_number, percentage, amount, trigger_condition, status, disbursed_at, release_notes, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertMentor = db.prepare(`
+    INSERT INTO corporate_mentors (
+      id, name, company, designation, expertise_domain, email, office_hours_slot, status, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const insertTechTransfer = db.prepare(`
+    INSERT INTO tech_transfer_agreements (
+      id, project_id, corporate_partner, municipal_partner, agreement_type, royalty_percentage, status, terms_summary, signed_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const seedEcoTx = db.transaction(() => {
+    // Challenge 1: Water Biosand Filtration (Escalated -> Claimed by BIT Mesra -> Working Prototype -> Funded by Tata Steel)
+    const chal1Id = 'chal_water_001';
+    const proj1Id = 'proj_bit_mesra_01';
+    insertChallenge.run(
+      chal1Id,
+      waterReport.id,
+      'Heavy Metal & Organic Runoff Remediation in Stormwater Canals',
+      'Municipal drainage channel receives toxic residential and industrial overflow during monsoon. Needs passive low-cost in-situ bio-filtration.',
+      'Water',
+      'Dangerous',
+      'Ward 14 West (Canal Sector)',
+      'Environmental & Chemical Engineering Dept',
+      96,
+      'in_progress',
+      'Municipal Corporation of Greater Mumbai (MCGM)',
+      'Design a gravity-fed multi-tier bio-sand and activated biochar filtration media compatible with municipal culvert dimensions.',
+      pastDate,
+      now
+    );
+
+    // Project 1
+    const studentTeam1 = JSON.stringify([
+      { name: 'Aarav Sharma', studentId: '2022-CE-041', apaarId: 'APAAR-9821-4402-1190', role: 'Team Lead & CAD Modeler', hours: 64 },
+      { name: 'Pooja Verma', studentId: '2022-ENV-019', apaarId: 'APAAR-7712-3094-8821', role: 'Biochar Chemistry Researcher', hours: 58 },
+      { name: 'Nikhil Rane', studentId: '2023-CE-082', apaarId: 'APAAR-4109-8831-5542', role: 'Field Deployment & Telemetry', hours: 42 },
+    ]);
+
+    insertProject.run(
+      proj1Id,
+      chal1Id,
+      waterReport.id,
+      'Modular Activated Biochar Gravity Filter for Urban Stormwater Canals',
+      'Birla Institute of Technology (BIT) Mesra',
+      'Department of Civil & Environmental Engineering',
+      'Dr. Ananya Sen (Prof. Water Resources)',
+      'ananya.sen@bitmesra.ac.in',
+      studentTeam1,
+      3, // Stage 3: Working Prototype Developed
+      128,
+      36,
+      350000,
+      350000,
+      JSON.stringify(['SDG 6: Clean Water', 'SDG 11: Sustainable Cities', 'SDG 9: Innovation']),
+      'A low-cost permeable biochar filter insert that removes 92% of suspended heavy solids and neutralizes pH in active stormwater culverts.',
+      'active',
+      pastDate,
+      now
+    );
+
+    // Milestones for Project 1
+    insertMilestone.run(
+      'ms_p1_s1',
+      proj1Id,
+      1,
+      'Feasibility & Chemical Contaminant Study',
+      'Spectroscopic analysis of Ward 14 canal sludge samples and hydrological flow simulations.',
+      'completed',
+      JSON.stringify({ schematicUrl: '/samples/lab_schematic_stage1.pdf', testDataNotes: 'TSS: 420mg/L, Lead: 0.18ppm, pH: 5.4' }),
+      35,
+      pastDate,
+      pastDate
+    );
+
+    insertMilestone.run(
+      'ms_p1_s2',
+      proj1Id,
+      2,
+      'Lab Scale Simulation & Porous Media Testing',
+      'Built 1:5 scale column flow test bench. Validated 88% turbidity reduction at 2.4 L/sec flow velocity.',
+      'completed',
+      JSON.stringify({ githubUrl: 'https://github.com/alcheminds/bit-mesra-biofilter', videoUrl: 'https://youtu.be/sample-lab-test' }),
+      45,
+      pastDate,
+      pastDate
+    );
+
+    insertMilestone.run(
+      'ms_p1_s3',
+      proj1Id,
+      3,
+      'Working Full-Scale Culvert Prototype Development',
+      'Manufactured stainless-steel caged modular biochar cartridge with ultrasonic flow sensor.',
+      'completed',
+      JSON.stringify({ prototypeUrl: '/samples/prototype_biofilter.jpg', telemetryUrl: 'https://telemetry.alcheminds.gov.in/node-14' }),
+      48,
+      now,
+      pastDate
+    );
+
+    insertMilestone.run(
+      'ms_p1_s4',
+      proj1Id,
+      4,
+      'Field Deployment & Municipal Pilot Sign-off',
+      'Install 4 filter units along Ward 14 West canal culvert and test for 30 consecutive days with municipal engineers.',
+      'in_progress',
+      JSON.stringify({ deploymentTarget: 'Ward 14 Culvert No. 3', expectedCompletion: '3 Weeks' }),
+      0,
+      null,
+      pastDate
+    );
+
+    // NEP 2020 Credit Certificates for Student Team 1
+    insertNepCredit.run(
+      'nep_cert_001',
+      'Aarav Sharma',
+      '2022-CE-041',
+      'APAAR-9821-4402-1190',
+      'BIT Mesra',
+      proj1Id,
+      64,
+      18,
+      4.0,
+      'SHA256:7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069',
+      now,
+      now
+    );
+
+    insertNepCredit.run(
+      'nep_cert_002',
+      'Pooja Verma',
+      '2022-ENV-019',
+      'APAAR-7712-3094-8821',
+      'BIT Mesra',
+      proj1Id,
+      58,
+      14,
+      4.0,
+      'SHA256:4a385f52f854b73b53c7c25e839e55397f37470f1bd9d6f304523d573d45c5c0',
+      now,
+      now
+    );
+
+    // CSR Grant & Escrow Tranches for Project 1 (Tata Steel CSR)
+    const grant1Id = 'grant_tata_001';
+    insertGrant.run(
+      grant1Id,
+      proj1Id,
+      'Tata Steel Foundation (CSR Division)',
+      'L27100MH1907PLC000260',
+      'CSR00001248',
+      'Vikramaditya Rao (VP Sustainability)',
+      'vikramaditya.rao@tatasteel.com',
+      350000,
+      105000, // 30% disbursed
+      'partially_disbursed',
+      pastDate,
+      now
+    );
+
+    insertTranche.run(
+      'tranche_1_p1',
+      grant1Id,
+      1,
+      30.0,
+      105000,
+      'Disbursed upon HEI Lab Prototype Verification & CAD Approval',
+      'disbursed',
+      now,
+      'Tranche 1 (₹1,05,000) released to BIT Mesra R&D Account after prototype review.',
+      pastDate
+    );
+
+    insertTranche.run(
+      'tranche_2_p1',
+      grant1Id,
+      2,
+      70.0,
+      245000,
+      'Disbursed upon Municipal Field Deployment & Dual-Signoff Pilot Verification',
+      'escrow_locked',
+      null,
+      'Locked in Smart Escrow. Will release automatically upon Municipal Commissioner sign-off.',
+      pastDate
+    );
+
+    // Challenge 2: Sanitation / Smart Waste (Escalated -> Open for HEIs)
+    insertChallenge.run(
+      'chal_waste_002',
+      sanitationReport.id,
+      'Automated IoT Desilting & Clog Detection Robot for Stormwater Culverts',
+      'Sub-surface drainage culverts frequently choke with plastic garbage and silt causing upstream backflows in urban roads.',
+      'Sanitation',
+      'Serious',
+      'Ward 14 West (Municipal Canal Lane)',
+      'Robotics, Mechanical & IoT Engineering Dept',
+      92,
+      'open',
+      'Municipal Drainage Engineering Dept',
+      'Develop an amphibious crawler robot with obstacle sonar to clear silt blockages autonomously.',
+      pastDate,
+      pastDate
+    );
+
+    // Challenge 3: Heavy Pothole & Bitumen (Claimed by IIT Bombay)
+    const chal3Id = 'chal_road_003';
+    const proj3Id = 'proj_iitb_road_03';
+    insertChallenge.run(
+      chal3Id,
+      roadReport.id,
+      'Recycled Plastic-Enhanced Quick-Curing Bituminous Cold Mix for Wet Potholes',
+      'Monsoon potholes cannot be repaired using standard hot mix due to moisture and water pooling.',
+      'Roads',
+      'Serious',
+      'Ward 14 West (2nd Cross Road)',
+      'Materials Science & Transportation Engineering',
+      94,
+      'claimed',
+      'Roads & Infrastructure Directorate',
+      'Formulate a cold-setting emulsion that bonds to submerged bitumen within 2 hours.',
+      pastDate,
+      pastDate
+    );
+
+    insertProject.run(
+      proj3Id,
+      chal3Id,
+      roadReport.id,
+      'Eco-Bitumen Polymer Cold Pave for High-Rainfall Urban Arterials',
+      'Indian Institute of Technology (IIT) Bombay',
+      'Department of Civil Engineering & Center for Technology Alternatives',
+      'Prof. Rajesh Kulkarni',
+      'kulkarni.r@iitb.ac.in',
+      JSON.stringify([
+        { name: 'Kavita Menon', studentId: '21D070014', apaarId: 'APAAR-5532-1092-4411', role: 'Polymer Formulation Researcher', hours: 45 },
+        { name: 'Farhan Akhtar', studentId: '21D070028', apaarId: 'APAAR-1298-7734-9902', role: 'Marshall Stability Testing', hours: 40 },
+      ]),
+      2, // Stage 2: Simulation & Lab Testing
+      85,
+      12,
+      200000,
+      0,
+      JSON.stringify(['SDG 9: Industry & Innovation', 'SDG 11: Sustainable Cities', 'SDG 12: Responsible Consumption']),
+      'Cold-mix asphalt modified with waste HDPE/LDPE pellets capable of curing under 100% moisture saturation in 90 minutes.',
+      'active',
+      pastDate,
+      now
+    );
+
+    // Corporate Mentors
+    insertMentor.run(
+      'mentor_01',
+      'Dr. Siddharth Mukherjee',
+      'Larsen & Toubro (L&T Infrastructure)',
+      'Principal Materials Specialist',
+      'Civil Hydraulics & Polymer Concrete',
+      'siddharth.m@larsentoubro.com',
+      'Every Thursday, 4:00 PM - 6:00 PM IST',
+      'available',
+      pastDate
+    );
+
+    insertMentor.run(
+      'mentor_02',
+      'Meera Swaminathan',
+      'Tata Consultancy Services (TCS Research)',
+      'Head of Urban IoT & Smart Cities Lab',
+      'Smart Sensor Networks & Edge Telemetry',
+      'meera.s@tcs.com',
+      'Every Tuesday, 3:00 PM - 5:00 PM IST',
+      'available',
+      pastDate
+    );
+
+    // Tech Transfer Agreement
+    insertTechTransfer.run(
+      'tt_001',
+      proj1Id,
+      'Tata Steel Environmental Division',
+      'Municipal Corporation of Greater Mumbai',
+      'Municipal Rate Contract & Pilot Licensing',
+      3.0,
+      'in_review',
+      'Exclusive manufacturing of 50 bio-filter culvert inserts for Ward 14 & Ward 16 at subsidized municipal rate of ₹18,500/unit.',
+      null,
+      pastDate
+    );
+  });
+
+  try {
+    seedEcoTx();
+    console.log('✓ Successfully seeded cross-stakeholder demo ecosystem (Municipal, HEI, Industry).');
+  } catch (err) {
+    console.warn('Stakeholder seeding note:', err.message);
+  }
 }
 
 export function seedInitialEngagement() {

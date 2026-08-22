@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -17,19 +17,13 @@ import {
   ExternalLink,
   RefreshCw,
   AlertTriangle,
-  Zap,
-  Droplets,
-  Trash2,
-  TreePine,
-  Building2,
-  HelpCircle,
-  Users,
   GitBranch,
   ChevronDown,
   ChevronUp,
   Eye,
   EyeOff,
   Filter,
+  Maximize2,
 } from 'lucide-react';
 
 // ─── Type Definitions ────────────────────────────────────────────────────────
@@ -73,6 +67,7 @@ interface HotspotData {
   trend: string;
   avgPriorityScore: number;
   categoryBreakdown: Record<string, number>;
+  reports?: MapReport[];
 }
 
 interface PatternData {
@@ -98,20 +93,22 @@ interface FilterState {
 
 interface Props {
   onViewReport: (reportId: string) => void;
+  initialSelectedReportId?: string | null;
+  initialCenter?: [number, number] | null;
 }
 
 // ─── Category Helpers ─────────────────────────────────────────────────────────
 
-const CATEGORY_COLORS: Record<string, { hue: string; icon: React.ReactNode; dot: string }> = {
-  Roads: { hue: '#f59e0b', icon: <Building2 size={12} />, dot: '#f59e0b' },
-  Water: { hue: '#3b82f6', icon: <Droplets size={12} />, dot: '#3b82f6' },
-  Sanitation: { hue: '#8b5cf6', icon: <Trash2 size={12} />, dot: '#8b5cf6' },
-  Electricity: { hue: '#f97316', icon: <Zap size={12} />, dot: '#f97316' },
-  Environment: { hue: '#10b981', icon: <TreePine size={12} />, dot: '#10b981' },
-  Schools: { hue: '#06b6d4', icon: <Building2 size={12} />, dot: '#06b6d4' },
-  Agriculture: { hue: '#84cc16', icon: <TreePine size={12} />, dot: '#84cc16' },
-  'Public Services': { hue: '#ec4899', icon: <Users size={12} />, dot: '#ec4899' },
-  Other: { hue: '#94a3b8', icon: <HelpCircle size={12} />, dot: '#94a3b8' },
+const CATEGORY_COLORS: Record<string, { hue: string; dot: string }> = {
+  Roads: { hue: '#f59e0b', dot: '#f59e0b' },
+  Water: { hue: '#3b82f6', dot: '#3b82f6' },
+  Sanitation: { hue: '#8b5cf6', dot: '#8b5cf6' },
+  Electricity: { hue: '#f97316', dot: '#f97316' },
+  Environment: { hue: '#10b981', dot: '#10b981' },
+  Schools: { hue: '#06b6d4', dot: '#06b6d4' },
+  Agriculture: { hue: '#84cc16', dot: '#84cc16' },
+  'Public Services': { hue: '#ec4899', dot: '#ec4899' },
+  Other: { hue: '#94a3b8', dot: '#94a3b8' },
 };
 
 const SEVERITY_COLORS: Record<string, string> = {
@@ -133,16 +130,19 @@ const STATUS_COLORS: Record<string, string> = {
   'Follow-up Required': '#ef4444',
 };
 
-function getCategoryColor(cat: string): string {
+function getCategoryColor(cat?: string): string {
+  if (!cat) return '#94a3b8';
   return CATEGORY_COLORS[cat]?.dot ?? '#94a3b8';
 }
 
-function formatRelative(dateStr: string): string {
+function formatRelative(dateStr?: string): string {
+  if (!dateStr) return 'Recently';
   const now = Date.now();
   const then = new Date(dateStr).getTime();
+  if (isNaN(then)) return 'Recently';
   const diff = now - then;
   const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return `${Math.max(1, mins)}m ago`;
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
@@ -151,47 +151,53 @@ function formatRelative(dateStr: string): string {
 
 // ─── Custom Leaflet Icons ─────────────────────────────────────────────────────
 
-function createReportIcon(category: string, severity: string) {
-  const color = getCategoryColor(category);
-  const severityColor = SEVERITY_COLORS[severity] ?? color;
+function createReportIcon(category?: string, severity?: string) {
+  const safeCategory = typeof category === 'string' && category.trim() ? category.trim() : 'Other';
+  const safeSeverity = typeof severity === 'string' && severity.trim() ? severity.trim() : 'Moderate';
+  const color = getCategoryColor(safeCategory);
+  const severityColor = SEVERITY_COLORS[safeSeverity] ?? color;
+  const safeId = safeCategory.replace(/[^a-zA-Z0-9]/g, '_');
   const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="36" viewBox="0 0 28 36">
+    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 30 38">
       <defs>
-        <filter id="shadow">
-          <feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.4"/>
+        <filter id="shadow_${safeId}" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#000" flood-opacity="0.55"/>
         </filter>
       </defs>
-      <g filter="url(#shadow)">
-        <path d="M14 0C6.268 0 0 6.268 0 14c0 5.327 3.021 9.972 7.475 12.369L14 34l6.525-7.631C24.979 23.972 28 19.327 28 14 28 6.268 21.732 0 14 0z" fill="${color}"/>
-        <circle cx="14" cy="14" r="7" fill="#fff" opacity="0.95"/>
-        <circle cx="14" cy="14" r="4" fill="${severityColor}"/>
+      <g filter="url(#shadow_${safeId})">
+        <path d="M15 1C7.82 1 2 6.82 2 14c0 6.64 6.7 14.86 12.06 20.91a1.26 1.26 0 0 0 1.88 0C21.3 28.86 28 20.64 28 14 28 6.82 22.18 1 15 1z" fill="${color}" stroke="#ffffff" stroke-width="1.5"/>
+        <circle cx="15" cy="14" r="7.5" fill="#0d1222"/>
+        <circle cx="15" cy="14" r="4.5" fill="${severityColor}"/>
       </g>
     </svg>
   `;
   return L.divIcon({
     html: svg,
-    iconSize: [28, 36],
-    iconAnchor: [14, 36],
-    popupAnchor: [0, -38],
+    iconSize: [30, 38],
+    iconAnchor: [15, 38],
+    popupAnchor: [0, -40],
     className: 'alch-marker',
   });
 }
 
-function createClusterIcon(count: number, dominantCategory: string, avgPriority: number) {
-  const color = getCategoryColor(dominantCategory);
-  const size = Math.min(72, 40 + Math.floor(count * 2.5));
-  const ring = avgPriority >= 70 ? '#f43f5e' : color;
+function createClusterIcon(count: number, dominantCategory?: string, avgPriority: number = 50) {
+  const safeCategory = typeof dominantCategory === 'string' && dominantCategory.trim() ? dominantCategory.trim() : 'Other';
+  const color = getCategoryColor(safeCategory);
+  const safeCount = Number(count) || 1;
+  const size = Math.min(68, 42 + Math.floor(safeCount * 2));
+  const ring = (Number(avgPriority) || 50) >= 70 ? '#f43f5e' : color;
+  const safeId = safeCategory.replace(/[^a-zA-Z0-9]/g, '_');
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
       <defs>
-        <filter id="cs">
-          <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.5"/>
+        <filter id="cs_${safeId}" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.6"/>
         </filter>
       </defs>
-      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${color}" opacity="0.25" filter="url(#cs)"/>
-      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 6}" fill="${color}" opacity="0.7"/>
-      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 10}" fill="#0d1222"/>
-      <text x="${size / 2}" y="${size / 2 + 5}" text-anchor="middle" font-size="${count > 99 ? '11' : '14'}" font-weight="700" fill="${ring}" font-family="IBM Plex Mono, monospace">${count}</text>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${color}" opacity="0.25" filter="url(#cs_${safeId})"/>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 5}" fill="${color}" opacity="0.85" stroke="#ffffff" stroke-width="1.5"/>
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 9}" fill="#0d1222"/>
+      <text x="${size / 2}" y="${size / 2 + 5}" text-anchor="middle" font-size="${safeCount > 99 ? '11' : '13'}" font-weight="800" fill="${ring}" font-family="monospace">${safeCount}</text>
     </svg>
   `;
   return L.divIcon({
@@ -202,49 +208,108 @@ function createClusterIcon(count: number, dominantCategory: string, avgPriority:
   });
 }
 
-// ─── Map Controllers ──────────────────────────────────────────────────────────
+// ─── Map Dynamic Controller (Headless Hook Component) ──────────────────────────
 
-function LocationController({ onLocationFound }: { onLocationFound: (latlng: L.LatLng) => void }) {
+interface MapControllerProps {
+  initialCenter?: [number, number] | null;
+  reports: MapReport[];
+  hotspots: HotspotData[];
+  onMapReady?: (map: L.Map) => void;
+  onLocationFound?: (latlng: L.LatLng) => void;
+}
+
+function MapViewController({
+  initialCenter,
+  reports,
+  hotspots,
+  onMapReady,
+  onLocationFound,
+}: MapControllerProps) {
   const map = useMap();
-  const handleLocate = useCallback(() => {
-    map.locate({ setView: true, maxZoom: 14 });
-  }, [map]);
+  const hasAutoCentered = useRef(false);
+
+  useEffect(() => {
+    if (onMapReady) onMapReady(map);
+    // Invalidate size on initial mount and after layout renders
+    map.invalidateSize();
+    const t1 = setTimeout(() => map.invalidateSize(), 100);
+    const t2 = setTimeout(() => map.invalidateSize(), 300);
+    const t3 = setTimeout(() => map.invalidateSize(), 600);
+
+    const handleResize = () => map.invalidateSize();
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [map, onMapReady]);
 
   useMapEvents({
     locationfound(e) {
-      onLocationFound(e.latlng);
+      if (onLocationFound) onLocationFound(e.latlng);
     },
   });
 
-  return (
-    <button
-      onClick={handleLocate}
-      title="Go to my location"
-      style={{
-        position: 'absolute',
-        bottom: '100px',
-        right: '10px',
-        zIndex: 1000,
-        width: '38px',
-        height: '38px',
-        borderRadius: '10px',
-        background: 'var(--bg-card)',
-        border: '1px solid var(--border-medium)',
-        color: 'var(--accent-amber)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        cursor: 'pointer',
-        boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
-        transition: 'all 0.2s',
-      }}
-    >
-      <Navigation size={16} />
-    </button>
-  );
+  // Handle explicit initialCenter (e.g., from "View on Map" click)
+  useEffect(() => {
+    if (
+      initialCenter &&
+      Array.isArray(initialCenter) &&
+      !isNaN(Number(initialCenter[0])) &&
+      !isNaN(Number(initialCenter[1])) &&
+      (Number(initialCenter[0]) !== 0 || Number(initialCenter[1]) !== 0)
+    ) {
+      try {
+        map.flyTo(initialCenter, 16, { duration: 1.2 });
+        hasAutoCentered.current = true;
+      } catch (e) {
+        console.warn('Map flyTo failed:', e);
+      }
+    }
+  }, [initialCenter, map]);
+
+  // Handle auto-fit bounds on initial load if no explicit center was provided
+  useEffect(() => {
+    if (hasAutoCentered.current || initialCenter) return;
+
+    const coords: [number, number][] = [];
+
+    reports.forEach((r) => {
+      const lat = Number(r.latitude);
+      const lng = Number(r.longitude);
+      if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+        coords.push([lat, lng]);
+      }
+    });
+
+    hotspots.forEach((h) => {
+      const lat = Number(h.center?.latitude);
+      const lng = Number(h.center?.longitude);
+      if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+        coords.push([lat, lng]);
+      }
+    });
+
+    if (coords.length > 0) {
+      try {
+        const bounds = L.latLngBounds(coords);
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15 });
+          hasAutoCentered.current = true;
+        }
+      } catch (e) {
+        console.warn('Could not fit map bounds:', e);
+      }
+    }
+  }, [reports, hotspots, initialCenter, map]);
+
+  return null;
 }
 
-// ─── Bottom Sheet ─────────────────────────────────────────────────────────────
+// ─── Bottom Sheet for Single Report ───────────────────────────────────────────
 
 function ReportBottomSheet({
   report,
@@ -257,6 +322,7 @@ function ReportBottomSheet({
 }) {
   const catColor = getCategoryColor(report.category);
   const statusColor = STATUS_COLORS[report.status] ?? '#94a3b8';
+  const desc = report.description || 'Civic incident report recorded on Alcheminds.';
 
   return (
     <div
@@ -267,11 +333,13 @@ function ReportBottomSheet({
         right: 0,
         zIndex: 2000,
         background: 'var(--bg-card)',
-        borderTop: `2px solid ${catColor}`,
+        borderTop: `3px solid ${catColor}`,
         borderRadius: '20px 20px 0 0',
         padding: '1.5rem',
         boxShadow: '0 -8px 40px rgba(0,0,0,0.5)',
         animation: 'slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+        maxWidth: '720px',
+        margin: '0 auto',
       }}
     >
       {/* Drag Handle */}
@@ -282,7 +350,7 @@ function ReportBottomSheet({
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1rem' }}>
         <div style={{ flex: 1 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', flexWrap: 'wrap' }}>
             <span
               style={{
                 fontSize: '0.72rem',
@@ -292,10 +360,10 @@ function ReportBottomSheet({
                 background: catColor + '22',
                 color: catColor,
                 border: `1px solid ${catColor}44`,
-                fontFamily: 'var(--font-mono)',
+                fontFamily: 'monospace',
               }}
             >
-              {report.category}
+              {report.category || 'Civic'}
             </span>
             <span
               style={{
@@ -308,7 +376,7 @@ function ReportBottomSheet({
                 border: `1px solid ${statusColor}44`,
               }}
             >
-              {report.status}
+              {report.status || 'Active'}
             </span>
           </div>
           <div
@@ -319,12 +387,11 @@ function ReportBottomSheet({
               lineHeight: 1.3,
             }}
           >
-            {report.description.length > 80
-              ? report.description.slice(0, 80) + '…'
-              : report.description}
+            {desc.length > 120 ? desc.slice(0, 120) + '…' : desc}
           </div>
         </div>
         <button
+          type="button"
           onClick={onClose}
           style={{
             background: 'var(--bg-elevated)',
@@ -351,10 +418,10 @@ function ReportBottomSheet({
         }}
       >
         {[
-          { label: 'Severity', value: report.severity, color: SEVERITY_COLORS[report.severity] },
+          { label: 'Severity', value: report.severity || 'Moderate', color: SEVERITY_COLORS[report.severity] || catColor },
           { label: 'Reported', value: formatRelative(report.created_at), color: 'var(--text-secondary)' },
-          { label: 'Location', value: report.city || report.address?.split(',')[0] || '—', color: 'var(--text-secondary)' },
-          { label: 'Report ID', value: report.report_code, color: 'var(--accent-amber)', mono: true },
+          { label: 'Location', value: report.city || report.address?.split(',')[0] || `${Number(report.latitude).toFixed(4)}, ${Number(report.longitude).toFixed(4)}`, color: 'var(--text-secondary)' },
+          { label: 'Incident Code', value: report.report_code || report.id, color: 'var(--accent-amber)', mono: true },
         ].map((item) => (
           <div
             key={item.label}
@@ -373,7 +440,10 @@ function ReportBottomSheet({
                 fontSize: '0.85rem',
                 fontWeight: 700,
                 color: item.color,
-                fontFamily: (item as any).mono ? 'var(--font-mono)' : undefined,
+                fontFamily: (item as any).mono ? 'monospace' : undefined,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
               {item.value}
@@ -384,6 +454,7 @@ function ReportBottomSheet({
 
       {/* Action Button */}
       <button
+        type="button"
         onClick={() => onViewReport(report.id)}
         style={{
           width: '100%',
@@ -423,6 +494,7 @@ function ClusterBottomSheet({
 }) {
   const color = getCategoryColor(cluster.dominantCategory);
   const [expanded, setExpanded] = useState(false);
+  const clusterReports = cluster.reports || [];
 
   return (
     <div
@@ -433,13 +505,15 @@ function ClusterBottomSheet({
         right: 0,
         zIndex: 2000,
         background: 'var(--bg-card)',
-        borderTop: `2px solid ${color}`,
+        borderTop: `3px solid ${color}`,
         borderRadius: '20px 20px 0 0',
         padding: '1.5rem',
         boxShadow: '0 -8px 40px rgba(0,0,0,0.5)',
         animation: 'slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
         maxHeight: '70vh',
         overflowY: 'auto',
+        maxWidth: '720px',
+        margin: '0 auto',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1rem' }}>
@@ -458,15 +532,16 @@ function ClusterBottomSheet({
                 boxShadow: `0 0 8px ${color}`,
               }}
             />
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
               GEOGRAPHIC CLUSTER
             </span>
           </div>
           <div style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-            {cluster.count} reports · {cluster.dominantCategory} zone
+            {cluster.count} reports · {cluster.dominantCategory || 'Civic'} zone
           </div>
         </div>
         <button
+          type="button"
           onClick={onClose}
           style={{
             background: 'var(--bg-elevated)',
@@ -482,56 +557,31 @@ function ClusterBottomSheet({
       </div>
 
       {/* Category Breakdown */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.5rem' }}>
-          CATEGORY BREAKDOWN
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-          {Object.entries(cluster.categoryCounts).map(([cat, cnt]) => (
-            <span
-              key={cat}
-              style={{
-                fontSize: '0.75rem',
-                padding: '0.2rem 0.65rem',
-                borderRadius: 'var(--radius-full)',
-                background: getCategoryColor(cat) + '22',
-                color: getCategoryColor(cat),
-                border: `1px solid ${getCategoryColor(cat)}44`,
-                fontWeight: 600,
-              }}
-            >
-              {cat} ({cnt})
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {/* Severity Distribution */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.5rem' }}>
-          SEVERITY DISTRIBUTION
-        </div>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {Object.entries(cluster.severityCounts)
-            .filter(([, v]) => v > 0)
-            .map(([sev, cnt]) => (
-              <div
-                key={sev}
+      {cluster.categoryCounts && Object.keys(cluster.categoryCounts).length > 0 && (
+        <div style={{ marginBottom: '1rem' }}>
+          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.5rem' }}>
+            CATEGORY BREAKDOWN
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {Object.entries(cluster.categoryCounts).map(([cat, cnt]) => (
+              <span
+                key={cat}
                 style={{
-                  flex: 1,
-                  textAlign: 'center',
-                  padding: '0.5rem',
-                  borderRadius: '8px',
-                  background: SEVERITY_COLORS[sev] + '18',
-                  border: `1px solid ${SEVERITY_COLORS[sev]}44`,
+                  fontSize: '0.75rem',
+                  padding: '0.2rem 0.65rem',
+                  borderRadius: 'var(--radius-full)',
+                  background: getCategoryColor(cat) + '22',
+                  color: getCategoryColor(cat),
+                  border: `1px solid ${getCategoryColor(cat)}44`,
+                  fontWeight: 600,
                 }}
               >
-                <div style={{ fontSize: '1rem', fontWeight: 800, color: SEVERITY_COLORS[sev] }}>{cnt}</div>
-                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 500 }}>{sev}</div>
-              </div>
+                {cat} ({cnt})
+              </span>
             ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Avg Priority */}
       <div
@@ -551,16 +601,17 @@ function ClusterBottomSheet({
           style={{
             fontSize: '1.1rem',
             fontWeight: 800,
-            color: cluster.avgPriorityScore >= 70 ? '#ef4444' : color,
-            fontFamily: 'var(--font-mono)',
+            color: (cluster.avgPriorityScore || 50) >= 70 ? '#ef4444' : color,
+            fontFamily: 'monospace',
           }}
         >
-          {cluster.avgPriorityScore}/100
+          {cluster.avgPriorityScore || 50}/100
         </span>
       </div>
 
-      {/* Individual reports list */}
+      {/* Individual reports list toggle */}
       <button
+        type="button"
         onClick={() => setExpanded(!expanded)}
         style={{
           width: '100%',
@@ -578,12 +629,12 @@ function ClusterBottomSheet({
           marginBottom: expanded ? '0.75rem' : 0,
         }}
       >
-        <span>View {cluster.reports.length} individual reports</span>
+        <span>View {clusterReports.length} individual reports</span>
         {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
       </button>
 
       {expanded &&
-        cluster.reports.slice(0, 8).map((r) => (
+        clusterReports.slice(0, 15).map((r) => (
           <div
             key={r.id}
             onClick={() => onViewReport(r.id)}
@@ -620,10 +671,10 @@ function ClusterBottomSheet({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {r.description}
+                {r.description || 'Civic Incident'}
               </div>
               <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                {r.severity} · {formatRelative(r.created_at)}
+                {r.severity || 'Moderate'} · {formatRelative(r.created_at)}
               </div>
             </div>
             <ExternalLink size={14} color="var(--text-muted)" />
@@ -639,10 +690,12 @@ function HotspotInfoPanel({
   hotspots,
   patterns,
   onClose,
+  onFocusHotspot,
 }: {
   hotspots: HotspotData[];
   patterns: PatternData[];
   onClose: () => void;
+  onFocusHotspot?: (hs: HotspotData) => void;
 }) {
   const [tab, setTab] = useState<'hotspots' | 'patterns'>('hotspots');
 
@@ -656,7 +709,7 @@ function HotspotInfoPanel({
     <div
       style={{
         position: 'absolute',
-        top: '4.5rem',
+        top: '5.5rem',
         right: '1rem',
         zIndex: 1500,
         width: '320px',
@@ -683,12 +736,13 @@ function HotspotInfoPanel({
         }}
       >
         <div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: '0.15rem' }}>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'monospace', marginBottom: '0.15rem' }}>
             INTELLIGENCE LAYER
           </div>
           <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>Civic Analysis</div>
         </div>
         <button
+          type="button"
           onClick={onClose}
           style={{
             background: 'var(--bg-elevated)',
@@ -719,6 +773,7 @@ function HotspotInfoPanel({
         ].map((t) => (
           <button
             key={t.key}
+            type="button"
             onClick={() => setTab(t.key as typeof tab)}
             style={{
               flex: 1,
@@ -747,7 +802,7 @@ function HotspotInfoPanel({
           <>
             {hotspots.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                No civic hotspots detected in the current view. Report more issues to reveal patterns.
+                No civic hotspots detected in the current view.
               </div>
             ) : (
               hotspots.map((hs) => {
@@ -755,12 +810,15 @@ function HotspotInfoPanel({
                 return (
                   <div
                     key={hs.id}
+                    onClick={() => onFocusHotspot && onFocusHotspot(hs)}
                     style={{
                       marginBottom: '0.75rem',
                       borderRadius: 'var(--radius-md)',
                       border: `1px solid ${color}44`,
                       background: color + '08',
                       overflow: 'hidden',
+                      cursor: onFocusHotspot ? 'pointer' : 'default',
+                      transition: 'transform 0.15s, border-color 0.15s',
                     }}
                   >
                     {/* Hotspot Header */}
@@ -773,17 +831,17 @@ function HotspotInfoPanel({
                       <div
                         style={{
                           fontSize: '0.65rem',
-                          fontFamily: 'var(--font-mono)',
+                          fontFamily: 'monospace',
                           fontWeight: 700,
                           color: hs.trend === 'Critical' ? '#ef4444' : color,
                           letterSpacing: '0.04em',
                           marginBottom: '0.25rem',
                         }}
                       >
-                        ⚠ CIVIC HOTSPOT
+                        CIVIC HOTSPOT
                       </div>
                       <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        {hs.dominantCategory} — {hs.zoneName || hs.name.split(' ')[0]}
+                        {hs.dominantCategory} — {hs.zoneName || hs.name?.split(' ')[0] || 'Zone'}
                       </div>
                     </div>
                     {/* Stats */}
@@ -797,10 +855,10 @@ function HotspotInfoPanel({
                         }}
                       >
                         {[
-                          { label: 'Reports', value: String(hs.reportCount) },
-                          { label: 'Communities', value: String(hs.communitiesImpacted) },
-                          { label: 'Span', value: hs.recurrenceDays },
-                          { label: 'Trend', value: hs.trend },
+                          { label: 'Reports', value: String(hs.reportCount || 0) },
+                          { label: 'Communities', value: String(hs.communitiesImpacted || 1) },
+                          { label: 'Span', value: hs.recurrenceDays || 'Active' },
+                          { label: 'Trend', value: hs.trend || 'Monitoring' },
                         ].map(({ label, value }) => (
                           <div
                             key={label}
@@ -826,23 +884,25 @@ function HotspotInfoPanel({
                         ))}
                       </div>
                       {/* Category chips */}
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
-                        {Object.entries(hs.categoryBreakdown).map(([cat, cnt]) => (
-                          <span
-                            key={cat}
-                            style={{
-                              fontSize: '0.65rem',
-                              padding: '0.15rem 0.5rem',
-                              borderRadius: 'var(--radius-full)',
-                              background: getCategoryColor(cat) + '20',
-                              color: getCategoryColor(cat),
-                              fontWeight: 600,
-                            }}
-                          >
-                            {cat} {cnt}
-                          </span>
-                        ))}
-                      </div>
+                      {hs.categoryBreakdown && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem' }}>
+                          {Object.entries(hs.categoryBreakdown).map(([cat, cnt]) => (
+                            <span
+                              key={cat}
+                              style={{
+                                fontSize: '0.65rem',
+                                padding: '0.15rem 0.5rem',
+                                borderRadius: 'var(--radius-full)',
+                                background: getCategoryColor(cat) + '20',
+                                color: getCategoryColor(cat),
+                                fontWeight: 600,
+                              }}
+                            >
+                              {cat} {cnt}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -855,7 +915,7 @@ function HotspotInfoPanel({
           <>
             {patterns.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                No systemic patterns detected yet. Patterns emerge when related reports cluster in geographic proximity.
+                No systemic patterns detected yet.
               </div>
             ) : (
               patterns.map((p) => (
@@ -869,14 +929,13 @@ function HotspotInfoPanel({
                     overflow: 'hidden',
                   }}
                 >
-                  {/* Pattern Header */}
                   <div style={{ padding: '0.75rem 0.85rem 0.5rem', borderBottom: '1px solid rgba(99,102,241,0.15)' }}>
                     <div
                       style={{
                         fontSize: '0.62rem',
-                        fontFamily: 'var(--font-mono)',
+                        fontFamily: 'monospace',
                         fontWeight: 700,
-                        color: 'var(--accent-indigo)',
+                        color: '#818cf8',
                         marginBottom: '0.25rem',
                         display: 'flex',
                         alignItems: 'center',
@@ -884,62 +943,56 @@ function HotspotInfoPanel({
                       }}
                     >
                       <GitBranch size={11} />
-                      HYPOTHESIS · {Math.round(p.confidenceScore * 100)}% CONFIDENCE
+                      HYPOTHESIS · {Math.round((p.confidenceScore || 0.75) * 100)}% CONFIDENCE
                     </div>
                     <div style={{ fontSize: '0.83rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
                       {p.title}
                     </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      {p.connectedReportsCount} connected reports · {p.zoneName}
+                      {p.connectedReportsCount} connected reports · {p.zoneName || 'Area'}
                     </div>
                   </div>
 
                   <div style={{ padding: '0.75rem 0.85rem' }}>
-                    {/* Symptoms */}
-                    <div style={{ marginBottom: '0.65rem' }}>
-                      <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.35rem' }}>
-                        OBSERVED SYMPTOMS
-                      </div>
-                      {p.symptoms.map((s, i) => (
-                        <div
-                          key={i}
-                          style={{
-                            fontSize: '0.75rem',
-                            color: 'var(--text-secondary)',
-                            padding: '0.2rem 0',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                          }}
-                        >
-                          <span style={{ color: 'var(--accent-indigo)', fontSize: '0.9rem', lineHeight: 1 }}>•</span>
-                          {s}
+                    {p.symptoms && p.symptoms.length > 0 && (
+                      <div style={{ marginBottom: '0.65rem' }}>
+                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '0.35rem' }}>
+                          OBSERVED SYMPTOMS
                         </div>
-                      ))}
-                    </div>
+                        {p.symptoms.map((s, i) => (
+                          <div
+                            key={i}
+                            style={{
+                              fontSize: '0.75rem',
+                              color: 'var(--text-secondary)',
+                              padding: '0.2rem 0',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                            }}
+                          >
+                            <span style={{ color: '#818cf8', fontSize: '0.9rem', lineHeight: 1 }}>•</span>
+                            {s}
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
-                    {/* Underlying Hypothesis */}
                     <div
                       style={{
                         background: 'rgba(99, 102, 241, 0.08)',
                         borderRadius: '8px',
                         padding: '0.6rem 0.75rem',
                         marginBottom: '0.5rem',
-                        borderLeft: '3px solid var(--accent-indigo)',
+                        borderLeft: '3px solid #818cf8',
                       }}
                     >
-                      <div style={{ fontSize: '0.65rem', color: 'var(--accent-indigo)', fontWeight: 700, marginBottom: '0.2rem' }}>
+                      <div style={{ fontSize: '0.65rem', color: '#818cf8', fontWeight: 700, marginBottom: '0.2rem' }}>
                         POTENTIAL UNDERLYING PROBLEM
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                         {p.underlyingHypothesis}
                       </div>
-                    </div>
-
-                    {/* Disclaimer */}
-                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontStyle: 'italic', display: 'flex', gap: '0.35rem', alignItems: 'flex-start' }}>
-                      <AlertTriangle size={10} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-                      This is a system-generated hypothesis, not a confirmed diagnosis.
                     </div>
                   </div>
                 </div>
@@ -973,6 +1026,7 @@ function FiltersBar({
   ) => (
     <button
       key={label}
+      type="button"
       onClick={onClick}
       style={{
         padding: '0.3rem 0.7rem',
@@ -1004,6 +1058,8 @@ function FiltersBar({
         border: '1px solid var(--border-medium)',
         boxShadow: '0 4px 24px rgba(0,0,0,0.4)',
         padding: '0.75rem 1rem',
+        maxWidth: '840px',
+        margin: '0 auto',
       }}
     >
       {/* Category row */}
@@ -1075,7 +1131,7 @@ function StatsOverlay({ reports, clusters, hotspots }: { reports: MapReport[]; c
             boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
           }}
         >
-          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: stat.color, fontFamily: 'var(--font-mono)', lineHeight: 1 }}>
+          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: stat.color, fontFamily: 'monospace', lineHeight: 1 }}>
             {stat.value}
           </div>
           <div style={{ fontSize: '0.62rem', color: 'var(--text-muted)', fontWeight: 500 }}>{stat.label}</div>
@@ -1087,7 +1143,11 @@ function StatsOverlay({ reports, clusters, hotspots }: { reports: MapReport[]; c
 
 // ─── Main CommunityMap Component ──────────────────────────────────────────────
 
-export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
+export const CommunityMap: React.FC<Props> = ({
+  onViewReport,
+  initialSelectedReportId,
+  initialCenter,
+}) => {
   const [reports, setReports] = useState<MapReport[]>([]);
   const [clusters, setClusters] = useState<ClusterData[]>([]);
   const [hotspots, setHotspots] = useState<HotspotData[]>([]);
@@ -1100,7 +1160,9 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
   const [showIntelligence, setShowIntelligence] = useState(false);
   const [showHotspots, setShowHotspots] = useState(true);
   const [userPos, setUserPos] = useState<[number, number] | null>(null);
-  const mapCenter: [number, number] = [19.076, 72.8777]; // Mumbai default
+  const mapInstanceRef = useRef<L.Map | null>(null);
+
+  const defaultCenter: [number, number] = [19.076, 72.8777]; // Default Mumbai / fallback
 
   const buildQuery = (f: FilterState) => {
     const params = new URLSearchParams();
@@ -1125,20 +1187,47 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
       const hotspotData = await hotspotRes.json();
       const patternData = await patternRes.json();
 
-      setReports(mapData.reports ?? []);
-      setClusters(mapData.clusters ?? []);
-      setHotspots(hotspotData.hotspots ?? []);
-      setPatterns(patternData.patterns ?? []);
-    } catch (e) {
-      setError('Failed to load map data. Is the server running?');
+      const fetchedReports = (mapData.reports || []).filter(
+        (r: any) => r && !isNaN(Number(r.latitude)) && !isNaN(Number(r.longitude))
+      );
+      setReports(fetchedReports);
+      setClusters(mapData.clusters || []);
+      setHotspots(hotspotData.hotspots || []);
+      setPatterns(patternData.patterns || []);
+
+      // If deep-linked report ID is passed, auto-select it and open bottom sheet
+      if (initialSelectedReportId && fetchedReports.length > 0) {
+        const match = fetchedReports.find(
+          (r: MapReport) => r.id === initialSelectedReportId || r.report_code === initialSelectedReportId
+        );
+        if (match) {
+          setSelectedReport(match);
+        }
+      }
+    } catch (e: any) {
+      console.error('Failed to load map data:', e);
+      setError('Failed to load map data. Please verify the backend server is running.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialSelectedReportId]);
 
   useEffect(() => {
     fetchData(filters);
   }, [filters, fetchData]);
+
+  // Handle deep-link report selection whenever initialSelectedReportId changes
+  useEffect(() => {
+    if (initialSelectedReportId && reports.length > 0) {
+      const match = reports.find(
+        (r) => r.id === initialSelectedReportId || r.report_code === initialSelectedReportId
+      );
+      if (match) {
+        setSelectedReport(match);
+        setSelectedCluster(null);
+      }
+    }
+  }, [initialSelectedReportId, reports]);
 
   const handleFiltersChange = (newFilters: FilterState) => {
     setFilters(newFilters);
@@ -1146,14 +1235,76 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
     setSelectedCluster(null);
   };
 
-  // Determine which reports to show as individual pins vs inside clusters
-  // We show individual markers for single-report clusters; cluster marker for multi-report clusters
-  const singleReports = clusters.filter((c) => c.count === 1).map((c) => c.reports[0]);
-  const multiClusters = clusters.filter((c) => c.count > 1);
+  const handleLocateMe = () => {
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.locate({ setView: true, maxZoom: 15 });
+    }
+  };
+
+  const handleFitAll = () => {
+    if (!mapInstanceRef.current) return;
+    const coords: [number, number][] = [];
+    reports.forEach((r) => {
+      const lat = Number(r.latitude);
+      const lng = Number(r.longitude);
+      if (!isNaN(lat) && !isNaN(lng)) coords.push([lat, lng]);
+    });
+    hotspots.forEach((h) => {
+      const lat = Number(h.center?.latitude);
+      const lng = Number(h.center?.longitude);
+      if (!isNaN(lat) && !isNaN(lng)) coords.push([lat, lng]);
+    });
+    if (coords.length > 0) {
+      const bounds = L.latLngBounds(coords);
+      if (bounds.isValid()) {
+        mapInstanceRef.current.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+      }
+    }
+  };
+
+  const handleFocusHotspot = (hs: HotspotData) => {
+    if (!mapInstanceRef.current || !hs.center) return;
+    const lat = Number(hs.center.latitude);
+    const lng = Number(hs.center.longitude);
+    if (!isNaN(lat) && !isNaN(lng)) {
+      mapInstanceRef.current.flyTo([lat, lng], 15, { duration: 1 });
+      setShowIntelligence(false);
+    }
+  };
+
+  // Filter single reports vs multi clusters safely
+  const singleReports = (clusters || [])
+    .filter((c) => c && c.count === 1 && c.reports && c.reports.length > 0 && c.reports[0])
+    .map((c) => c.reports[0])
+    .filter((r) => r && !isNaN(Number(r.latitude)) && !isNaN(Number(r.longitude)));
+
+  const multiClusters = (clusters || []).filter(
+    (c) => c && c.count > 1 && c.center && !isNaN(Number(c.center.latitude)) && !isNaN(Number(c.center.longitude))
+  );
+
+  const validHotspots = (hotspots || []).filter(
+    (hs) => hs && hs.center && !isNaN(Number(hs.center.latitude)) && !isNaN(Number(hs.center.longitude))
+  );
+
+  // Individual reports to render: either unclustered single reports or all reports fallback
+  const reportsToRender =
+    clusters && clusters.length > 0
+      ? singleReports
+      : (reports || []).filter((r) => r && !isNaN(Number(r.latitude)) && !isNaN(Number(r.longitude)));
 
   return (
-    <div style={{ position: 'relative', height: 'calc(100vh - 56px)', overflow: 'hidden' }}>
-      {/* Leaflet CSS */}
+    <div
+      className="community-map-wrapper"
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        minHeight: 'calc(100vh - 70px)',
+        overflow: 'hidden',
+        backgroundColor: 'var(--bg-primary)',
+      }}
+    >
+      {/* Leaflet Custom Map Styles */}
       <style>{`
         @keyframes slideUp {
           from { transform: translateY(100%); opacity: 0; }
@@ -1166,16 +1317,14 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
         .alch-marker, .alch-cluster {
           background: transparent !important;
           border: none !important;
+          cursor: pointer;
         }
         .leaflet-container {
-          background: #060810 !important;
-          font-family: var(--font-sans) !important;
-        }
-        .leaflet-tile-pane {
-          filter: brightness(0.85) saturate(0.7);
-        }
-        [data-theme='light'] .leaflet-tile-pane {
-          filter: brightness(1) saturate(0.8);
+          background: var(--bg-primary) !important;
+          font-family: inherit !important;
+          width: 100% !important;
+          height: 100% !important;
+          min-height: 100% !important;
         }
         .leaflet-control-zoom {
           border: 1px solid var(--border-medium) !important;
@@ -1206,14 +1355,14 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
         }
       `}</style>
 
-      {/* Filters */}
+      {/* Filters Bar */}
       <FiltersBar filters={filters} onChange={handleFiltersChange} />
 
-      {/* Map */}
+      {/* Interactive Map */}
       <MapContainer
-        center={mapCenter}
+        center={initialCenter || defaultCenter}
         zoom={12}
-        style={{ width: '100%', height: '100%' }}
+        style={{ width: '100%', height: '100%', minHeight: '100%' }}
         zoomControl={true}
       >
         <TileLayer
@@ -1221,9 +1370,17 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        <LocationController onLocationFound={(latlng) => setUserPos([latlng.lat, latlng.lng])} />
+        <MapViewController
+          initialCenter={initialCenter}
+          reports={reports}
+          hotspots={validHotspots}
+          onMapReady={(map) => {
+            mapInstanceRef.current = map;
+          }}
+          onLocationFound={(latlng) => setUserPos([latlng.lat, latlng.lng])}
+        />
 
-        {/* User location marker */}
+        {/* User live location marker */}
         {userPos && (
           <Marker
             position={userPos}
@@ -1238,30 +1395,48 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
 
         {/* Civic Hotspot overlays */}
         {showHotspots &&
-          hotspots.map((hs) => {
+          validHotspots.map((hs) => {
             const color = getCategoryColor(hs.dominantCategory);
             const ringColor = hs.trend === 'Critical' ? '#ef4444' : hs.trend === 'Increasing' ? '#f97316' : color;
+            const centerPos: [number, number] = [Number(hs.center.latitude), Number(hs.center.longitude)];
             return (
               <React.Fragment key={hs.id}>
                 <Circle
-                  center={[hs.center.latitude, hs.center.longitude]}
-                  radius={hs.radiusMeters}
+                  center={centerPos}
+                  radius={hs.radiusMeters || 500}
                   pathOptions={{
                     color: ringColor,
                     fillColor: ringColor,
-                    fillOpacity: 0.06,
+                    fillOpacity: 0.08,
                     weight: 1.5,
                     dashArray: '6, 4',
-                    opacity: 0.5,
+                    opacity: 0.6,
+                  }}
+                  eventHandlers={{
+                    click: () => {
+                      if (hs.reports && hs.reports.length > 0) {
+                        setSelectedCluster({
+                          id: hs.id,
+                          center: hs.center,
+                          count: hs.reportCount,
+                          reports: hs.reports,
+                          dominantCategory: hs.dominantCategory,
+                          categoryCounts: hs.categoryBreakdown || {},
+                          severityCounts: {},
+                          avgPriorityScore: hs.avgPriorityScore,
+                        });
+                        setSelectedReport(null);
+                      }
+                    },
                   }}
                 />
                 <Circle
-                  center={[hs.center.latitude, hs.center.longitude]}
-                  radius={hs.radiusMeters * 0.35}
+                  center={centerPos}
+                  radius={(hs.radiusMeters || 500) * 0.35}
                   pathOptions={{
                     color: ringColor,
                     fillColor: ringColor,
-                    fillOpacity: 0.12,
+                    fillOpacity: 0.16,
                     weight: 0,
                   }}
                 />
@@ -1270,10 +1445,10 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
           })}
 
         {/* Individual report markers */}
-        {singleReports.map((report) => (
+        {reportsToRender.map((report) => (
           <Marker
             key={report.id}
-            position={[report.latitude, report.longitude]}
+            position={[Number(report.latitude), Number(report.longitude)]}
             icon={createReportIcon(report.category, report.severity)}
             eventHandlers={{
               click: () => {
@@ -1288,7 +1463,7 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
         {multiClusters.map((cluster) => (
           <Marker
             key={cluster.id}
-            position={[cluster.center.latitude, cluster.center.longitude]}
+            position={[Number(cluster.center.latitude), Number(cluster.center.longitude)]}
             icon={createClusterIcon(cluster.count, cluster.dominantCategory, cluster.avgPriorityScore)}
             eventHandlers={{
               click: () => {
@@ -1351,7 +1526,7 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
       {/* Stats Overlay */}
       {!loading && <StatsOverlay reports={reports} clusters={clusters} hotspots={hotspots} />}
 
-      {/* Map Tool Buttons (right side) */}
+      {/* Map Control Buttons (right side overlay) */}
       <div
         style={{
           position: 'absolute',
@@ -1365,8 +1540,9 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
       >
         {/* Intelligence Panel Toggle */}
         <button
+          type="button"
           onClick={() => setShowIntelligence(!showIntelligence)}
-          title="Civic Intelligence"
+          title="Civic Intelligence & Analysis"
           style={{
             width: '40px',
             height: '40px',
@@ -1387,6 +1563,7 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
 
         {/* Hotspot visibility toggle */}
         <button
+          type="button"
           onClick={() => setShowHotspots(!showHotspots)}
           title={showHotspots ? 'Hide hotspot zones' : 'Show hotspot zones'}
           style={{
@@ -1407,8 +1584,55 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
           {showHotspots ? <Eye size={17} /> : <EyeOff size={17} />}
         </button>
 
-        {/* Refresh */}
+        {/* Fit All Reports */}
         <button
+          type="button"
+          onClick={handleFitAll}
+          title="Fit all reports in view"
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '10px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-medium)',
+            color: 'var(--text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+            transition: 'all 0.2s',
+          }}
+        >
+          <Maximize2 size={16} />
+        </button>
+
+        {/* Go to my location */}
+        <button
+          type="button"
+          onClick={handleLocateMe}
+          title="Go to my location"
+          style={{
+            width: '40px',
+            height: '40px',
+            borderRadius: '10px',
+            background: 'var(--bg-card)',
+            border: '1px solid var(--border-medium)',
+            color: 'var(--accent-amber)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+            transition: 'all 0.2s',
+          }}
+        >
+          <Navigation size={16} />
+        </button>
+
+        {/* Refresh map */}
+        <button
+          type="button"
           onClick={() => fetchData(filters)}
           title="Refresh map"
           style={{
@@ -1433,9 +1657,10 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
       {/* Intelligence Panel */}
       {showIntelligence && (
         <HotspotInfoPanel
-          hotspots={hotspots}
+          hotspots={validHotspots}
           patterns={patterns}
           onClose={() => setShowIntelligence(false)}
+          onFocusHotspot={handleFocusHotspot}
         />
       )}
 
@@ -1464,3 +1689,4 @@ export const CommunityMap: React.FC<Props> = ({ onViewReport }) => {
     </div>
   );
 };
+export default CommunityMap;
