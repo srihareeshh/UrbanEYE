@@ -8,7 +8,7 @@ import {
   FileText,
   Sparkles,
 } from 'lucide-react';
-import { Navbar } from './components/Navbar';
+import { Navbar, type View } from './components/Navbar';
 import { MediaDropzone } from './components/MediaDropzone';
 import { AudioRecorder } from './components/AudioRecorder';
 import { LocationPicker } from './components/LocationPicker';
@@ -17,17 +17,22 @@ import { ReportReview } from './components/ReportReview';
 import { SubmissionSuccess } from './components/SubmissionSuccess';
 import { ReportsTracker } from './components/ReportsTracker';
 import { ReportDetailView } from './components/ReportDetailView';
+import { CommunityIssuesFeed } from './components/CommunityIssuesFeed';
 import { CommunityMap } from './components/CommunityMap';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type {
   EvidenceItem,
   LocationState,
   IssueDetailsState,
   StoredReport,
 } from './types';
+import { apiFetch, getCitizenUserId } from './utils/userSession';
 
 export function App() {
-  const [currentView, setCurrentView] = useState<'report' | 'tracker' | 'community' | 'detail'>('report');
+  const [currentView, setCurrentView] = useState<View>('community');
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
+  const [mapFocusReportId, setMapFocusReportId] = useState<string | null>(null);
+  const [mapCenter, setMapCenter] = useState<[number, number] | null>(null);
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [step, setStep] = useState<number>(1);
 
@@ -64,9 +69,12 @@ export function App() {
   const [submittedReport, setSubmittedReport] = useState<StoredReport | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [reportCount, setReportCount] = useState<number>(0);
+  const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
 
-  // Initialize theme & load report counts
+  // Initialize citizen user ID, theme & load counts
   useEffect(() => {
+    getCitizenUserId(); // Ensure citizen identity initialized
+
     const savedTheme = (localStorage.getItem('alcheminds-theme') as 'dark' | 'light') || 'dark';
     setTheme(savedTheme);
     document.documentElement.setAttribute('data-theme', savedTheme);
@@ -76,16 +84,39 @@ export function App() {
       try {
         const draft = JSON.parse(savedDraft);
         if (draft.details) setDetails(draft.details);
-        if (draft.location) setLocation(draft.location);
+        if (draft.location) {
+          const lat = Number(draft.location.latitude);
+          const lng = Number(draft.location.longitude);
+          setLocation((prev) => ({
+            ...prev,
+            ...draft.location,
+            latitude: !isNaN(lat) && lat !== 0 ? lat : 19.0760,
+            longitude: !isNaN(lng) && lng !== 0 ? lng : 72.8777,
+          }));
+        }
       } catch (e) {}
     }
 
-    fetch('/api/reports')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.reports) setReportCount(data.reports.length);
-      })
-      .catch(() => {});
+    const loadMetrics = async () => {
+      try {
+        const [repRes, actRes] = await Promise.all([
+          apiFetch('/api/reports'),
+          apiFetch('/api/user/activity'),
+        ]);
+
+        if (repRes.ok) {
+          const data = await repRes.json();
+          if (data && data.reports) setReportCount(data.reports.length);
+        }
+
+        if (actRes.ok) {
+          const actData = await actRes.json();
+          setUnreadNotificationsCount(actData.unreadCount || 0);
+        }
+      } catch (e) {}
+    };
+
+    loadMetrics();
   }, []);
 
   const toggleTheme = () => {
@@ -97,7 +128,7 @@ export function App() {
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+    setTimeout(() => setToastMessage(null), 3200);
   };
 
   const handleAddEvidence = (items: EvidenceItem[]) => {
@@ -188,6 +219,7 @@ export function App() {
       setSubmitProgressText('Registering report & initiating lifecycle audit...');
 
       const payload = {
+        userId: getCitizenUserId(),
         category: details.category,
         description: details.description,
         duration: details.duration,
@@ -218,7 +250,7 @@ export function App() {
         smartSuggested: details.smartSuggested,
       };
 
-      const res = await fetch('/api/reports', {
+      const res = await apiFetch('/api/reports', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -265,33 +297,70 @@ export function App() {
     setCurrentView('detail');
   };
 
+  const handleViewOnMap = (report: any) => {
+    const lat = Number(report.latitude ?? report.location?.latitude);
+    const lng = Number(report.longitude ?? report.location?.longitude);
+    const reportId = report.id || report.report_id || report.report_code;
+    setMapFocusReportId(reportId);
+    if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
+      setMapCenter([lat, lng]);
+    }
+    setCurrentView('map');
+  };
+
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* Navigation Top Bar */}
       <Navbar
         currentView={currentView}
         onNavigate={(view) => {
           setCurrentView(view);
           setSelectedReportId(null);
+          if (view === 'map') {
+            setMapFocusReportId(null);
+            setMapCenter(null);
+          }
           if (view === 'report' && step === 4) handleResetForm();
         }}
         theme={theme}
         onToggleTheme={toggleTheme}
         reportCount={reportCount}
+        unreadCount={unreadNotificationsCount}
       />
 
-      {/* Community Map — full-bleed, no container padding */}
-      {currentView === 'community' && (
-        <CommunityMap
-          onViewReport={(id) => {
-            setSelectedReportId(id);
-            setCurrentView('detail');
-          }}
-        />
+      {/* Community Map — full-bleed, flex-grows to fill remaining space after navbar */}
+      {currentView === 'map' && (
+        <div style={{ flex: 1, width: '100%', height: 'calc(100vh - 65px)', position: 'relative', overflow: 'hidden' }}>
+          <ErrorBoundary
+            fallbackTitle="Unable to load Community Map"
+            onReset={() => {
+              setMapFocusReportId(null);
+              setMapCenter(null);
+            }}
+          >
+            <CommunityMap
+              initialSelectedReportId={mapFocusReportId}
+              initialCenter={mapCenter}
+              onViewReport={(id) => {
+                setSelectedReportId(id);
+                setCurrentView('detail');
+              }}
+            />
+          </ErrorBoundary>
+        </div>
       )}
 
-      {/* Main Container — report / tracker / detail views */}
-      <main className="container" style={{ marginTop: currentView === 'community' ? 0 : '1.5rem', flex: 1, display: currentView === 'community' ? 'none' : undefined }}>
+      {/* Main Container — report / community / tracker / detail views */}
+      <main
+        className="container"
+        style={{
+          marginTop: '1.5rem',
+          flex: 1,
+          display: currentView === 'map' ? 'none' : 'block',
+          paddingBottom: '2.5rem',
+          overflowY: 'auto',
+        }}
+      >
         {/* Toast Notification */}
         {toastMessage && (
           <div
@@ -299,18 +368,19 @@ export function App() {
               position: 'fixed',
               bottom: '24px',
               right: '24px',
-              zIndex: 1000,
+              zIndex: 2000,
               backgroundColor: 'var(--bg-elevated)',
               border: '1px solid var(--accent-amber)',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)',
+              boxShadow: '0 4px 24px rgba(0, 0, 0, 0.45)',
               borderRadius: 'var(--radius-md)',
-              padding: '0.75rem 1.25rem',
+              padding: '0.8rem 1.35rem',
               fontSize: '0.875rem',
               fontWeight: 600,
               color: 'var(--text-primary)',
               display: 'flex',
               alignItems: 'center',
-              gap: '0.5rem',
+              gap: '0.55rem',
+              animation: 'slideUp 0.2s ease-out',
             }}
           >
             <Sparkles size={16} color="var(--accent-amber)" />
@@ -318,23 +388,33 @@ export function App() {
           </div>
         )}
 
-        {/* View: Report Detail Lifecycle View */}
+        {/* View 1: Report Detail Lifecycle View */}
         {currentView === 'detail' && selectedReportId ? (
           <ReportDetailView
             reportId={selectedReportId}
             onBack={() => {
               setSelectedReportId(null);
-              setCurrentView('tracker');
+              setCurrentView('community');
             }}
+            onViewOnMap={handleViewOnMap}
+            onShowToast={showToast}
+          />
+        ) : currentView === 'community' ? (
+          /* View 2: Community Issues Feed & Upvotes */
+          <CommunityIssuesFeed
+            onSelectIssue={handleSelectReport}
+            onViewOnMap={handleViewOnMap}
+            onShowToast={showToast}
           />
         ) : currentView === 'tracker' ? (
-          /* View: Registry / Tracker View */
+          /* View 3: Registry / My Activity & Updates View */
           <ReportsTracker
             onNewReport={handleResetForm}
             onSelectReport={handleSelectReport}
+            onViewOnMap={handleViewOnMap}
           />
-        ) : currentView === 'community' ? null : (
-          /* View 3: Issue Reporting Flow (Steps 1 to 4) */
+        ) : (
+          /* View 4: Issue Reporting Flow (Steps 1 to 4) */
           <div>
             {/* Step Wizard Progress Bar (Steps 1 to 3) */}
             {step < 4 && (
@@ -515,25 +595,27 @@ export function App() {
         )}
       </main>
 
-      {/* Minimal Footer */}
-      <footer
-        style={{
-          borderTop: '1px solid var(--border-subtle)',
-          padding: '1.25rem',
-          textAlign: 'center',
-          fontSize: '0.75rem',
-          color: 'var(--text-muted)',
-        }}
-      >
-        <div style={{ maxWidth: '820px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-          <div>
-            <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Alcheminds</span> — Phase 1, 2 & 3: Reporting · Lifecycle · Community Map
+      {/* Minimal Footer (hidden on full-screen map) */}
+      {currentView !== 'map' && (
+        <footer
+          style={{
+            borderTop: '1px solid var(--border-subtle)',
+            padding: '1.25rem',
+            textAlign: 'center',
+            fontSize: '0.75rem',
+            color: 'var(--text-muted)',
+          }}
+        >
+          <div style={{ maxWidth: '820px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+            <div>
+              <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Alcheminds</span> — Civic Technology Platform
+            </div>
+            <div className="mono">
+              Reporting · Community Upvotes · Lifecycle Tracking · Community Map
+            </div>
           </div>
-          <div className="mono">
-            7-Stage Lifecycle • Clustering • Civic Hotspots • Pattern Detection
-          </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }
