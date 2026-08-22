@@ -1,14 +1,15 @@
 import React from 'react';
-import { ShieldAlert, ListFilter, PlusCircle, Sun, Moon, MapPin } from 'lucide-react';
+import { ShieldAlert, ListFilter, PlusCircle, Sun, Moon, MapPin, Sparkles } from 'lucide-react';
 
-type View = 'report' | 'tracker' | 'community' | 'detail';
+export type View = 'report' | 'community' | 'tracker' | 'map' | 'detail';
 
 interface NavbarProps {
   currentView: View;
-  onNavigate: (view: 'report' | 'tracker' | 'community') => void;
+  onNavigate: (view: 'report' | 'community' | 'tracker' | 'map') => void;
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   reportCount?: number;
+  unreadCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -17,11 +18,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   theme,
   onToggleTheme,
   reportCount = 0,
+  unreadCount = 0,
 }) => {
-  const navItems: { id: 'report' | 'tracker' | 'community'; label: string; Icon: React.FC<{ size?: number }>; badge?: number }[] = [
+  const navItems: { id: 'report' | 'community' | 'tracker' | 'map'; label: string; Icon: React.FC<{ size?: number }>; badge?: number }[] = [
     { id: 'report', label: 'Report', Icon: PlusCircle },
-    { id: 'tracker', label: 'Tracker', Icon: ListFilter, badge: reportCount },
-    { id: 'community', label: 'Map', Icon: MapPin },
+    { id: 'community', label: 'Community', Icon: Sparkles },
+    { id: 'tracker', label: 'My Activity', Icon: ListFilter, badge: unreadCount > 0 ? unreadCount : (reportCount > 0 ? reportCount : undefined) },
+    { id: 'map', label: 'Map', Icon: MapPin },
   ];
 
   return (
@@ -96,7 +99,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   fontWeight: 600,
                 }}
               >
-                PHASE 3
+                CIVIC PLATFORM
               </span>
             </div>
             <div
@@ -106,7 +109,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 fontWeight: 500,
               }}
             >
-              Civic Intelligence & Community Map
+              Community Issues · Upvotes · Lifecycle Tracking
             </div>
           </div>
         </div>

@@ -133,6 +133,22 @@ export interface VerificationInfo {
   verified_at: string;
 }
 
+export interface UserNotification {
+  id: string;
+  user_id: string;
+  report_id: string;
+  report_code?: string;
+  category?: string;
+  status?: string;
+  event_type: string;
+  title: string;
+  message: string;
+  is_read: number;
+  created_at: string;
+}
+
+export type CommunitySortOption = 'nearby' | 'supported' | 'recent' | 'serious';
+
 export interface StoredReport {
   id: string;
   report_code: string;
@@ -154,6 +170,14 @@ export interface StoredReport {
   accuracy?: number | null;
   address?: string | null;
   city?: string | null;
+  photo_url?: string | null;
+  media_count?: number;
+  upvote_count?: number;
+  follower_count?: number;
+  is_upvoted?: boolean;
+  is_followed?: boolean;
+  distance_km?: number | null;
+  approx_location?: string;
   media?: Array<{
     id: string;
     media_type: MediaType;
@@ -173,3 +197,12 @@ export interface StoredReport {
   resolution?: ResolutionInfo | null;
   verifications?: VerificationInfo[];
 }
+
+export interface UserActivityData {
+  myReports: StoredReport[];
+  followingReports: StoredReport[];
+  upvotedReports: StoredReport[];
+  notifications: UserNotification[];
+  unreadCount: number;
+}
+
