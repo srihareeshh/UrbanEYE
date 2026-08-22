@@ -60,7 +60,19 @@ const MapEventsHandler: React.FC<{
 const MapRecenter: React.FC<{ coords: [number, number] }> = ({ coords }) => {
   const map = useMap();
   useEffect(() => {
-    map.flyTo(coords, map.getZoom(), { animate: true, duration: 0.8 });
+    if (
+      coords &&
+      Array.isArray(coords) &&
+      !isNaN(Number(coords[0])) &&
+      !isNaN(Number(coords[1])) &&
+      (Number(coords[0]) !== 0 || Number(coords[1]) !== 0)
+    ) {
+      try {
+        map.flyTo(coords, map.getZoom(), { animate: true, duration: 0.8 });
+      } catch (e) {
+        console.warn('MapRecenter flyTo failed:', e);
+      }
+    }
   }, [coords, map]);
   return null;
 };
@@ -312,7 +324,7 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       )}
 
       {/* Interactive Map View */}
-      <div style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      <div className="location-picker-map" style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
         {isAdjusting && (
           <form
             onSubmit={handleAddressSearch}
@@ -351,40 +363,48 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
           </form>
         )}
 
-        <MapContainer
-          center={[location.latitude, location.longitude]}
-          zoom={15}
-          scrollWheelZoom={false}
-          style={{ height: '230px', width: '100%' }}
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          <MapRecenter coords={[location.latitude, location.longitude]} />
-          <MapEventsHandler onUpdateCoords={handleUpdateCoordinates} />
+        {(() => {
+          const safeLat = !isNaN(Number(location.latitude)) && Number(location.latitude) !== 0 ? Number(location.latitude) : 19.0760;
+          const safeLng = !isNaN(Number(location.longitude)) && Number(location.longitude) !== 0 ? Number(location.longitude) : 72.8777;
+          const safeCoords: [number, number] = [safeLat, safeLng];
 
-          <Marker
-            position={[location.latitude, location.longitude]}
-            icon={customCivicIcon}
-            draggable={isAdjusting}
-            eventHandlers={{
-              dragend: (e) => {
-                const marker = e.target;
-                const position = marker.getLatLng();
-                handleUpdateCoordinates(position.lat, position.lng);
-              },
-            }}
-          />
+          return (
+            <MapContainer
+              center={safeCoords}
+              zoom={15}
+              scrollWheelZoom={false}
+              style={{ height: '230px', width: '100%' }}
+            >
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              <MapRecenter coords={safeCoords} />
+              <MapEventsHandler onUpdateCoords={handleUpdateCoordinates} />
 
-          {location.accuracy && (
-            <Circle
-              center={[location.latitude, location.longitude]}
-              radius={location.accuracy}
-              pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.15 }}
-            />
-          )}
-        </MapContainer>
+              <Marker
+                position={safeCoords}
+                icon={customCivicIcon}
+                draggable={isAdjusting}
+                eventHandlers={{
+                  dragend: (e) => {
+                    const marker = e.target;
+                    const position = marker.getLatLng();
+                    handleUpdateCoordinates(position.lat, position.lng);
+                  },
+                }}
+              />
+
+              {location.accuracy && !isNaN(Number(location.accuracy)) && (
+                <Circle
+                  center={safeCoords}
+                  radius={Number(location.accuracy)}
+                  pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.15 }}
+                />
+              )}
+            </MapContainer>
+          );
+        })()}
 
         {isAdjusting && (
           <div
