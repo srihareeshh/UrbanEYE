@@ -7,30 +7,18 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Dependencies
-node_modules/
-
-# Build files
-dist/
-dist-ssr/
-
-# Local environment
+node_modules
+dist
+dist-ssr
 *.local
-.env
-.env.*
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
-.idea/
+.idea
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-
-# SQLite database files
-server/alcheminds.db
-server/alcheminds.db-wal
-server/alcheminds.db-shm
