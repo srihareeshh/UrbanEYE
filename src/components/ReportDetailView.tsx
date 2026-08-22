@@ -375,8 +375,8 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
         onStageAdvanced={fetchReportDetails}
       />
 
-      {/* 3. Citizen Verification Loop Banner (Active when Resolved) */}
-      {report.status === 'Resolved' && (
+      {/* 3. Citizen Verification Loop Banner (Active when Resolved or Pending Citizen Confirmation) */}
+      {(report.status === 'Resolved' || report.status === 'Citizen Confirmation') && (
         <CitizenVerification
           reportId={report.id}
           reportCode={report.report_code}
