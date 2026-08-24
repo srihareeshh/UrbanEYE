@@ -230,19 +230,33 @@ function MapViewController({
 
   useEffect(() => {
     if (onMapReady) onMapReady(map);
-    // Invalidate size on initial mount and after layout renders
-    map.invalidateSize();
-    const t1 = setTimeout(() => map.invalidateSize(), 100);
-    const t2 = setTimeout(() => map.invalidateSize(), 300);
-    const t3 = setTimeout(() => map.invalidateSize(), 600);
+    
+    const triggerInvalidate = () => {
+      try {
+        map.invalidateSize();
+      } catch (err) {
+        console.warn('Map invalidateSize err:', err);
+      }
+    };
 
-    const handleResize = () => map.invalidateSize();
+    triggerInvalidate();
+    const rafId = requestAnimationFrame(triggerInvalidate);
+    const t1 = setTimeout(triggerInvalidate, 50);
+    const t2 = setTimeout(triggerInvalidate, 150);
+    const t3 = setTimeout(triggerInvalidate, 350);
+    const t4 = setTimeout(triggerInvalidate, 750);
+    const t5 = setTimeout(triggerInvalidate, 1200);
+
+    const handleResize = () => triggerInvalidate();
     window.addEventListener('resize', handleResize);
 
     return () => {
+      cancelAnimationFrame(rafId);
       clearTimeout(t1);
       clearTimeout(t2);
       clearTimeout(t3);
+      clearTimeout(t4);
+      clearTimeout(t5);
       window.removeEventListener('resize', handleResize);
     };
   }, [map, onMapReady]);
@@ -1298,8 +1312,8 @@ export const CommunityMap: React.FC<Props> = ({
       style={{
         position: 'relative',
         width: '100%',
-        height: '100%',
-        minHeight: 'calc(100vh - 70px)',
+        height: 'calc(100vh - 64px)',
+        minHeight: '500px',
         overflow: 'hidden',
         backgroundColor: 'var(--bg-primary)',
       }}
@@ -1362,12 +1376,12 @@ export const CommunityMap: React.FC<Props> = ({
       <MapContainer
         center={initialCenter || defaultCenter}
         zoom={12}
-        style={{ width: '100%', height: '100%', minHeight: '100%' }}
+        style={{ width: '100%', height: '100%', minHeight: '500px' }}
         zoomControl={true}
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
 
         <MapViewController
@@ -1514,12 +1528,28 @@ export const CommunityMap: React.FC<Props> = ({
             padding: '0.65rem 1.25rem',
             display: 'flex',
             alignItems: 'center',
-            gap: '0.6rem',
+            gap: '0.75rem',
             boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
           }}
         >
-          <AlertTriangle size={14} color="#ef4444" />
+          <AlertTriangle size={15} color="#ef4444" />
           <span style={{ fontSize: '0.8rem', color: '#ef4444', fontWeight: 500 }}>{error}</span>
+          <button
+            type="button"
+            onClick={() => fetchData(filters)}
+            style={{
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              color: '#ef4444',
+              borderRadius: '6px',
+              padding: '0.2rem 0.6rem',
+              fontSize: '0.75rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            Retry
+          </button>
         </div>
       )}
 

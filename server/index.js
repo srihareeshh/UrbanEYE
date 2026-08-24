@@ -234,164 +234,239 @@ app.post('/api/upload', upload.array('files', 10), async (req, res) => {
 });
 
 // 3. Create & Persist Report (With Initial Timeline Event)
-app.post('/api/reports', (req, res) => {
-  const {
-    category,
-    description,
-    duration = 'Today',
-    recurrence = 'First time',
-    severity = 'Moderate',
-    isRiskPresent = false,
-    riskDescription = '',
-    location,
-    media = [],
-    smartSuggested = false,
-    extraContext = {}
-  } = req.body;
-
-  if (!category) {
-    return res.status(400).json({ error: 'Issue category is required.' });
-  }
-
-  if (!description && media.length === 0) {
-    return res.status(400).json({ error: 'Report must include a description or at least one piece of evidence.' });
-  }
-
-  if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
-    return res.status(400).json({ error: 'A valid incident location is required.' });
-  }
-
-  const reportId = `rep_${crypto.randomBytes(8).toString('hex')}`;
-  const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-  const reportCode = `ALC-${new Date().getFullYear()}-${randomSuffix}`;
-  const userId = req.body.userId || `usr_${crypto.randomBytes(6).toString('hex')}`;
-
-  const priorityScore = calculateCivicPriority({
-    category,
-    severity,
-    recurrence,
-    duration,
-    is_risk_present: isRiskPresent
-  });
-
-  const insertReportTx = db.transaction(() => {
-    // 1. User
-    db.prepare(`
-      INSERT OR IGNORE INTO users (id, session_token, name)
-      VALUES (?, ?, ?)
-    `).run(userId, `sess_${userId}`, 'Citizen Reporter');
-
-    // 2. Report
-    db.prepare(`
-      INSERT INTO reports (
-        id, report_code, user_id, category, description, duration, recurrence,
-        severity, is_risk_present, risk_description, status, civic_priority_score,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `).run(
-      reportId,
-      reportCode,
-      userId,
+app.post('/api/reports', upload.any(), async (req, res) => {
+  try {
+    const {
       category,
-      description || '',
-      duration,
-      recurrence,
-      severity,
-      isRiskPresent ? 1 : 0,
-      riskDescription || null,
-      priorityScore
-    );
+      description = '',
+      duration = 'Today',
+      recurrence = 'First time',
+      severity = 'Moderate',
+      isRiskPresent,
+      is_risk_present,
+      riskDescription,
+      risk_description,
+      smartSuggested,
+      smart_suggested,
+      extraContext = {}
+    } = req.body;
 
-    // 3. Location
-    db.prepare(`
-      INSERT INTO report_location (
-        id, report_id, latitude, longitude, location_source, accuracy, address, city, state, postal_code
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      `loc_${crypto.randomBytes(6).toString('hex')}`,
-      reportId,
-      location.latitude,
-      location.longitude,
-      location.source || 'manual',
-      location.accuracy || null,
-      location.address || null,
-      location.city || null,
-      location.state || null,
-      location.postalCode || null
-    );
+    const safeCategory = category || req.body.category;
+    if (!safeCategory || typeof safeCategory !== 'string' || !safeCategory.trim()) {
+      return res.status(400).json({ error: 'Issue category is required.' });
+    }
 
-    // 4. Issue Details
-    db.prepare(`
-      INSERT INTO issue_details (
-        id, report_id, category, duration, recurrence, severity, smart_suggested, extra_context_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      `iss_${crypto.randomBytes(6).toString('hex')}`,
-      reportId,
-      category,
-      duration,
-      recurrence,
-      severity,
-      smartSuggested ? 1 : 0,
-      JSON.stringify(extraContext)
-    );
+    const safeDescription = description || req.body.description || '';
 
-    // 5. Media & Metadata
-    const mediaStmt = db.prepare(`
-      INSERT INTO report_media (
-        id, report_id, media_type, original_name, file_name, file_path, mime_type, file_size, duration_seconds
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+    // Extract location fields (supports both flat FormData fields and nested JSON location object)
+    let lat = req.body.latitude !== undefined && req.body.latitude !== '' 
+      ? Number(req.body.latitude) 
+      : (req.body.location?.latitude !== undefined ? Number(req.body.location.latitude) : NaN);
+    let lng = req.body.longitude !== undefined && req.body.longitude !== '' 
+      ? Number(req.body.longitude) 
+      : (req.body.location?.longitude !== undefined ? Number(req.body.location.longitude) : NaN);
 
-    const metaStmt = db.prepare(`
-      INSERT INTO report_metadata (
-        id, report_id, media_id, exif_json, device_info
-      ) VALUES (?, ?, ?, ?, ?)
-    `);
+    // Fallback default coordinates if not provided
+    if (isNaN(lat) || isNaN(lng)) {
+      lat = 19.0760;
+      lng = 72.8777;
+    }
 
-    for (const item of media) {
-      const mediaId = item.mediaId || `med_${crypto.randomBytes(8).toString('hex')}`;
-      mediaStmt.run(
-        mediaId,
-        reportId,
-        item.mediaType || 'image',
-        item.originalName || 'uploaded_media',
-        item.fileName || path.basename(item.filePath || ''),
-        item.filePath,
-        item.mimeType || null,
-        item.fileSize || null,
-        item.durationSeconds || null
-      );
+    const locationSource = req.body.location_source || req.body.location?.source || 'manual';
+    const locationAccuracy = req.body.location_accuracy ? Number(req.body.location_accuracy) : (req.body.location?.accuracy ? Number(req.body.location.accuracy) : null);
+    const address = req.body.address || req.body.location?.address || 'Mumbai, Maharashtra';
+    const city = req.body.city || req.body.location?.city || 'Mumbai';
+    const state = req.body.state || req.body.location?.state || 'Maharashtra';
+    const postalCode = req.body.postal_code || req.body.postalCode || req.body.location?.postalCode || null;
 
-      if (item.exif || item.deviceInfo) {
-        metaStmt.run(
-          `met_${crypto.randomBytes(6).toString('hex')}`,
-          reportId,
-          mediaId,
-          item.exif ? JSON.stringify(item.exif) : null,
-          item.deviceInfo ? JSON.stringify(item.deviceInfo) : null
-        );
+    const safeIsRiskPresent = isRiskPresent === true || isRiskPresent === 'true' || is_risk_present === true || is_risk_present === 'true';
+    const safeRiskDescription = riskDescription || risk_description || '';
+    const safeSmartSuggested = smartSuggested === true || smartSuggested === 'true' || smart_suggested === true || smart_suggested === 'true';
+
+    // Parse extraContext if passed as JSON string
+    let parsedExtraContext = {};
+    if (typeof extraContext === 'string') {
+      try { parsedExtraContext = JSON.parse(extraContext); } catch (e) { parsedExtraContext = {}; }
+    } else if (typeof extraContext === 'object' && extraContext !== null) {
+      parsedExtraContext = extraContext;
+    }
+
+    // Process all uploaded files (multipart req.files)
+    const mediaToInsert = [];
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+      for (const file of req.files) {
+        const mediaType = getMediaType(file.mimetype);
+        let exifData = null;
+        if (mediaType === 'image') {
+          try {
+            const fullExif = await exifr.parse(file.path, { gps: true, tiff: true, exif: true });
+            if (fullExif) {
+              exifData = {
+                make: fullExif.Make || null,
+                model: fullExif.Model || null,
+                dateTimeOriginal: fullExif.DateTimeOriginal || fullExif.CreateDate || null,
+              };
+            }
+          } catch (exifErr) {
+            console.warn('EXIF parsing note for upload:', exifErr.message);
+          }
+        }
+        mediaToInsert.push({
+          mediaId: `med_${crypto.randomBytes(8).toString('hex')}`,
+          fileName: file.filename,
+          originalName: file.originalname,
+          filePath: `/uploads/${file.filename}`,
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          mediaType,
+          exif: exifData
+        });
       }
     }
 
-    // 6. Phase 2: Seed Initial Timeline Event ("Report Submitted")
-    db.prepare(`
-      INSERT INTO report_timeline (
-        id, report_id, stage, actor_type, actor_name, title, description, created_at
-      ) VALUES (?, ?, 'Submitted', 'citizen', 'Citizen Reporter', 'Report Submitted', ?, CURRENT_TIMESTAMP)
-    `).run(
-      `tml_${crypto.randomBytes(6).toString('hex')}`,
-      reportId,
-      `Report registered with priority score ${priorityScore}/100 and queued for review.`
-    );
-  });
+    // Also include any media passed as JSON array in req.body.media
+    if (req.body.media) {
+      let extraMedia = [];
+      if (typeof req.body.media === 'string') {
+        try { extraMedia = JSON.parse(req.body.media); } catch (e) {}
+      } else if (Array.isArray(req.body.media)) {
+        extraMedia = req.body.media;
+      }
+      if (Array.isArray(extraMedia)) {
+        mediaToInsert.push(...extraMedia);
+      }
+    }
 
-  try {
+    const reportId = `rep_${crypto.randomBytes(8).toString('hex')}`;
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const reportCode = `ALC-${new Date().getFullYear()}-${randomSuffix}`;
+    const userId = req.body.userId || `usr_${crypto.randomBytes(6).toString('hex')}`;
+
+    const priorityScore = calculateCivicPriority({
+      category: safeCategory,
+      severity,
+      recurrence,
+      duration,
+      is_risk_present: safeIsRiskPresent
+    });
+
+    const insertReportTx = db.transaction(() => {
+      // 1. User
+      db.prepare(`
+        INSERT OR IGNORE INTO users (id, session_token, name)
+        VALUES (?, ?, ?)
+      `).run(userId, `sess_${userId}`, 'Citizen Reporter');
+
+      // 2. Report
+      db.prepare(`
+        INSERT INTO reports (
+          id, report_code, user_id, category, description, duration, recurrence,
+          severity, is_risk_present, risk_description, status, civic_priority_score,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `).run(
+        reportId,
+        reportCode,
+        userId,
+        safeCategory,
+        safeDescription,
+        duration,
+        recurrence,
+        severity,
+        safeIsRiskPresent ? 1 : 0,
+        safeRiskDescription || null,
+        priorityScore
+      );
+
+      // 3. Location
+      db.prepare(`
+        INSERT INTO report_location (
+          id, report_id, latitude, longitude, location_source, accuracy, address, city, state, postal_code
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        `loc_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        lat,
+        lng,
+        locationSource,
+        locationAccuracy,
+        address,
+        city,
+        state,
+        postalCode
+      );
+
+      // 4. Issue Details
+      db.prepare(`
+        INSERT INTO issue_details (
+          id, report_id, category, duration, recurrence, severity, smart_suggested, extra_context_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        `iss_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        safeCategory,
+        duration,
+        recurrence,
+        severity,
+        safeSmartSuggested ? 1 : 0,
+        JSON.stringify(parsedExtraContext)
+      );
+
+      // 5. Media & Metadata
+      const mediaStmt = db.prepare(`
+        INSERT INTO report_media (
+          id, report_id, media_type, original_name, file_name, file_path, mime_type, file_size, duration_seconds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const metaStmt = db.prepare(`
+        INSERT INTO report_metadata (
+          id, report_id, media_id, exif_json, device_info
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+
+      for (const item of mediaToInsert) {
+        const mediaId = item.mediaId || `med_${crypto.randomBytes(8).toString('hex')}`;
+        mediaStmt.run(
+          mediaId,
+          reportId,
+          item.mediaType || 'image',
+          item.originalName || 'uploaded_media',
+          item.fileName || path.basename(item.filePath || ''),
+          item.filePath || '',
+          item.mimeType || null,
+          item.fileSize || null,
+          item.durationSeconds || null
+        );
+
+        if (item.exif || item.deviceInfo) {
+          metaStmt.run(
+            `met_${crypto.randomBytes(6).toString('hex')}`,
+            reportId,
+            mediaId,
+            item.exif ? JSON.stringify(item.exif) : null,
+            item.deviceInfo ? JSON.stringify(item.deviceInfo) : null
+          );
+        }
+      }
+
+      // 6. Phase 2: Seed Initial Timeline Event ("Report Submitted")
+      db.prepare(`
+        INSERT INTO report_timeline (
+          id, report_id, stage, actor_type, actor_name, title, description, created_at
+        ) VALUES (?, ?, 'Submitted', 'citizen', 'Citizen Reporter', 'Report Submitted', ?, CURRENT_TIMESTAMP)
+      `).run(
+        `tml_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        `Report registered with priority score ${priorityScore}/100 and queued for review.`
+      );
+    });
+
     insertReportTx();
 
     const report = db.prepare(`SELECT * FROM reports WHERE id = ?`).get(reportId);
     const loc = db.prepare(`SELECT * FROM report_location WHERE report_id = ?`).get(reportId);
-    const mediaItems = db.prepare(`SELECT * FROM report_media WHERE report_id = ?`).all(reportId);
+    const mediaItemsResult = db.prepare(`SELECT * FROM report_media WHERE report_id = ?`).all(reportId);
     const issueDetails = db.prepare(`SELECT * FROM issue_details WHERE report_id = ?`).get(reportId);
     const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(reportId);
 
@@ -400,14 +475,14 @@ app.post('/api/reports', (req, res) => {
       report: {
         ...report,
         location: loc,
-        media: mediaItems,
+        media: mediaItemsResult,
         issueDetails,
         timeline
       }
     });
-  } catch (dbError) {
-    console.error('Database insertion error:', dbError);
-    res.status(500).json({ error: 'Failed to persist report to database.' });
+  } catch (error) {
+    console.error('Report submission error:', error);
+    res.status(500).json({ error: error.message || 'Failed to persist report to database.' });
   }
 });
 

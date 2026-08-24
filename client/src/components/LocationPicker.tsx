@@ -56,9 +56,41 @@ const MapEventsHandler: React.FC<{
   return null;
 };
 
-// Component to dynamically re-center map when coordinates change
-const MapRecenter: React.FC<{ coords: [number, number] }> = ({ coords }) => {
+// Component to dynamically invalidate size and re-center map when coordinates change
+const MapViewController: React.FC<{ coords: [number, number] }> = ({ coords }) => {
   const map = useMap();
+
+  useEffect(() => {
+    const triggerInvalidate = () => {
+      try {
+        map.invalidateSize();
+      } catch (e) {
+        console.warn('LocationPicker invalidateSize note:', e);
+      }
+    };
+
+    triggerInvalidate();
+    const rafId = requestAnimationFrame(triggerInvalidate);
+    const t1 = setTimeout(triggerInvalidate, 50);
+    const t2 = setTimeout(triggerInvalidate, 150);
+    const t3 = setTimeout(triggerInvalidate, 350);
+    const t4 = setTimeout(triggerInvalidate, 750);
+    const t5 = setTimeout(triggerInvalidate, 1200);
+
+    const handleResize = () => triggerInvalidate();
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearTimeout(t4);
+      clearTimeout(t5);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [map]);
+
   useEffect(() => {
     if (
       coords &&
@@ -68,12 +100,14 @@ const MapRecenter: React.FC<{ coords: [number, number] }> = ({ coords }) => {
       (Number(coords[0]) !== 0 || Number(coords[1]) !== 0)
     ) {
       try {
-        map.flyTo(coords, map.getZoom(), { animate: true, duration: 0.8 });
+        map.invalidateSize();
+        map.setView(coords, map.getZoom() || 15, { animate: true });
       } catch (e) {
-        console.warn('MapRecenter flyTo failed:', e);
+        console.warn('MapViewController setView note:', e);
       }
     }
-  }, [coords, map]);
+  }, [coords[0], coords[1], map]);
+
   return null;
 };
 
@@ -324,7 +358,21 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
       )}
 
       {/* Interactive Map View */}
-      <div className="location-picker-map" style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden' }}>
+      <div className="location-picker-map" style={{ position: 'relative', borderRadius: 'var(--radius-md)', overflow: 'hidden', height: '230px', width: '100%', minHeight: '230px' }}>
+        <style>{`
+          .custom-civic-pin {
+            background: transparent !important;
+            border: none !important;
+            cursor: pointer;
+          }
+          .location-picker-map .leaflet-container {
+            width: 100% !important;
+            height: 230px !important;
+            min-height: 230px !important;
+            font-family: inherit !important;
+          }
+        `}</style>
+
         {isAdjusting && (
           <form
             onSubmit={handleAddressSearch}
@@ -373,13 +421,13 @@ export const LocationPicker: React.FC<LocationPickerProps> = ({
               center={safeCoords}
               zoom={15}
               scrollWheelZoom={false}
-              style={{ height: '230px', width: '100%' }}
+              style={{ height: '230px', width: '100%', minHeight: '230px' }}
             >
               <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                attribution='&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
               />
-              <MapRecenter coords={safeCoords} />
+              <MapViewController coords={safeCoords} />
               <MapEventsHandler onUpdateCoords={handleUpdateCoordinates} />
 
               <Marker
