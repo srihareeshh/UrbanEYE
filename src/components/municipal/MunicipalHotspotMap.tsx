@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   MapContainer,
   TileLayer,
@@ -11,6 +11,7 @@ import 'leaflet/dist/leaflet.css';
 import {
   Flame,
   Layers,
+  MapPin,
 } from 'lucide-react';
 import type { StoredReport } from '../../types';
 
@@ -31,7 +32,6 @@ const createHotspotIcon = (color: string, iconHtml: string) => {
         border: 2px solid white;
         box-shadow: 0 4px 14px rgba(0,0,0,0.5);
         cursor: pointer;
-        animation: pulse 2s infinite;
       ">
         ${iconHtml}
       </div>
@@ -52,65 +52,82 @@ interface MunicipalHotspotMapProps {
   onSelectIssue: (issue: StoredReport) => void;
 }
 
-const CHRONIC_HOTSPOT_ZONES = [
-  {
-    id: 'zone_14_canal',
-    name: 'Ward 14 West Canal & Highway Culvert Zone',
-    ward: 'Ward 14 West (Bandra/Khar)',
-    lat: 19.0760,
-    lng: 72.8777,
-    radius: 450,
-    riskScore: 94,
-    chronicType: 'Recurrent Monsoon Stormwater Flooding & Chemical Runoff',
-    activeIncidents: 5,
-    escalatedToHEI: true,
-    color: '#f43f5e',
-  },
-  {
-    id: 'zone_08_market',
-    name: 'Ward 08 Central Vegetable Market Corridor',
-    ward: 'Ward 08 Central (Dadar)',
-    lat: 19.0178,
-    lng: 72.8478,
-    radius: 380,
-    riskScore: 82,
-    chronicType: 'High-Density Solid Waste & Choked Street Gutters',
-    activeIncidents: 4,
-    escalatedToHEI: false,
-    color: '#f59e0b',
-  },
-  {
-    id: 'zone_19_highway',
-    name: 'Ward 19 East Arterial Highway Junction',
-    ward: 'Ward 19 East (Kurla/Chembur)',
-    lat: 19.0650,
-    lng: 72.8920,
-    radius: 520,
-    riskScore: 88,
-    chronicType: 'Severe Pothole Cluster & Bitumen Subgrade Failure',
-    activeIncidents: 6,
-    escalatedToHEI: true,
-    color: '#f43f5e',
-  },
-];
+export interface DynamicHotspotZone {
+  id: string;
+  name: string;
+  ward: string;
+  lat: number;
+  lng: number;
+  radius: number;
+  riskScore: number;
+  chronicType: string;
+  activeIncidents: number;
+  escalatedToHEI: boolean;
+  color: string;
+}
 
 export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
   issues,
   selectedWard,
   onSelectIssue,
 }) => {
-  const [activeZone, setActiveZone] = useState<typeof CHRONIC_HOTSPOT_ZONES[0] | null>(CHRONIC_HOTSPOT_ZONES[0]);
+  const [selectedZoneId, setSelectedZoneId] = useState<string | null>(null);
 
-  const filteredZones = selectedWard === 'all'
-    ? CHRONIC_HOTSPOT_ZONES
-    : CHRONIC_HOTSPOT_ZONES.filter((z) => z.ward.toLowerCase().includes(selectedWard.toLowerCase()));
+  // Filter issues by ward and valid coordinates
+  const filteredIssues = useMemo(() => {
+    return issues.filter((iss) => {
+      if (selectedWard !== 'all' && iss.address && !iss.address.toLowerCase().includes(selectedWard.toLowerCase())) {
+        return false;
+      }
+      return typeof iss.latitude === 'number' && typeof iss.longitude === 'number';
+    });
+  }, [issues, selectedWard]);
 
-  const filteredIssues = issues.filter((iss) => {
-    if (selectedWard !== 'all' && iss.address && !iss.address.toLowerCase().includes(selectedWard.toLowerCase())) {
-      return false;
-    }
-    return iss.latitude && iss.longitude;
-  });
+  // Dynamically cluster real reported issues into hotspot zones
+  const dynamicZones = useMemo<DynamicHotspotZone[]>(() => {
+    if (filteredIssues.length === 0) return [];
+
+    const clusters: { [key: string]: StoredReport[] } = {};
+
+    filteredIssues.forEach((iss) => {
+      // Group nearby issues by rounding lat/lng to ~1-2km grid
+      const gridKey = `${iss.latitude.toFixed(2)}_${iss.longitude.toFixed(2)}`;
+      if (!clusters[gridKey]) {
+        clusters[gridKey] = [];
+      }
+      clusters[gridKey].push(iss);
+    });
+
+    return Object.entries(clusters).map(([key, group], index) => {
+      const avgLat = group.reduce((acc, curr) => acc + curr.latitude, 0) / group.length;
+      const avgLng = group.reduce((acc, curr) => acc + curr.longitude, 0) / group.length;
+      const maxScore = Math.max(...group.map((g) => g.civic_priority_score || 50));
+      const hasHei = group.some((g) => (g as any).is_escalated_to_hei || (g as any).hei_challenge);
+      const isDangerous = group.some((g) => g.severity === 'Dangerous' || g.severity === 'Critical');
+      const primaryCategory = group[0].category || 'Civic Infrastructure';
+      const wardName = group[0].city || group[0].address || `Zone ${index + 1}`;
+
+      return {
+        id: `zone_${key}_${index}`,
+        name: `${primaryCategory} Hotspot (${wardName})`,
+        ward: wardName,
+        lat: avgLat,
+        lng: avgLng,
+        radius: Math.min(300 + group.length * 80, 800),
+        riskScore: maxScore,
+        chronicType: `${group.length} reported ${primaryCategory.toLowerCase()} issue${group.length > 1 ? 's' : ''}`,
+        activeIncidents: group.filter((g) => !['Resolved', 'Confirmed Resolved'].includes(g.status)).length,
+        escalatedToHEI: hasHei,
+        color: isDangerous ? '#f43f5e' : maxScore > 75 ? '#f59e0b' : '#3b82f6',
+      };
+    });
+  }, [filteredIssues]);
+
+  const activeZone = dynamicZones.find((z) => z.id === selectedZoneId) || dynamicZones[0] || null;
+
+  const defaultCenter: [number, number] = filteredIssues.length > 0
+    ? [filteredIssues[0].latitude, filteredIssues[0].longitude]
+    : [19.0760, 72.8777];
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', gap: '1.25rem', height: '560px' }}>
@@ -126,8 +143,8 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
         }}
       >
         <MapContainer
-          center={[19.0760, 72.8777]}
-          zoom={12}
+          center={defaultCenter}
+          zoom={filteredIssues.length > 0 ? 13 : 12}
           style={{ width: '100%', height: '100%' }}
           scrollWheelZoom={true}
         >
@@ -136,8 +153,8 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
             url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
           />
 
-          {/* Chronic Hotspot Radial Density Overlays */}
-          {filteredZones.map((zone) => (
+          {/* Dynamic Hotspot Density Circles */}
+          {dynamicZones.map((zone) => (
             <Circle
               key={zone.id}
               center={[zone.lat, zone.lng]}
@@ -150,17 +167,17 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
                 dashArray: activeZone?.id === zone.id ? undefined : '4, 6',
               }}
               eventHandlers={{
-                click: () => setActiveZone(zone),
+                click: () => setSelectedZoneId(zone.id),
               }}
             />
           ))}
 
-          {/* Incident Pins */}
+          {/* Live Incident Pins from PostgreSQL */}
           {filteredIssues.map((issue) => {
             const isHEI = (issue as any).is_escalated_to_hei || (issue as any).hei_challenge;
             const icon = isHEI
               ? HEI_ICON
-              : issue.severity === 'Dangerous'
+              : issue.severity === 'Dangerous' || issue.severity === 'Critical'
               ? DANGEROUS_ICON
               : SERIOUS_ICON;
 
@@ -178,7 +195,7 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', marginBottom: '0.3rem' }}>
                       <span
                         style={{
-                          fontSize: '0.65rem',
+                          fontSize: '0.6875rem',
                           fontWeight: 700,
                           padding: '0.1rem 0.4rem',
                           borderRadius: '4px',
@@ -190,12 +207,18 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
                       </span>
                       <span
                         style={{
-                          fontSize: '0.65rem',
+                          fontSize: '0.6875rem',
                           fontWeight: 700,
                           padding: '0.1rem 0.4rem',
                           borderRadius: '4px',
-                          backgroundColor: issue.severity === 'Dangerous' ? '#ffe4e6' : '#fef3c7',
-                          color: issue.severity === 'Dangerous' ? '#e11d48' : '#d97706',
+                          backgroundColor:
+                            issue.severity === 'Dangerous' || issue.severity === 'Critical'
+                              ? '#ffe4e6'
+                              : '#fef3c7',
+                          color:
+                            issue.severity === 'Dangerous' || issue.severity === 'Critical'
+                              ? '#e11d48'
+                              : '#d97706',
                         }}
                       >
                         {issue.severity}
@@ -205,7 +228,7 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
                       {issue.category}: {issue.description.slice(0, 75)}...
                     </p>
                     <p style={{ fontSize: '0.6875rem', color: '#64748b', margin: '0.2rem 0' }}>
-                      📍 {issue.address || 'Ward 14 West'}
+                      📍 {issue.address || issue.city || 'Geotagged Location'}
                     </p>
                     <button
                       type="button"
@@ -252,7 +275,7 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#f43f5e' }} />
-            <span>Dangerous / AI Risk 85+</span>
+            <span>Critical / Dangerous</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#f59e0b' }} />
@@ -260,7 +283,7 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
             <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#6366f1' }} />
-            <span>Escalated to HEI R&D</span>
+            <span>Escalated to HEI</span>
           </div>
         </div>
       </div>
@@ -292,70 +315,92 @@ export const MunicipalHotspotMap: React.FC<MunicipalHotspotMapProps> = ({
           </p>
         </div>
 
-        {/* Chronic Hotspot Clusters List */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
-          {filteredZones.map((zone) => {
-            const isSelected = activeZone?.id === zone.id;
-            return (
-              <div
-                key={zone.id}
-                onClick={() => setActiveZone(zone)}
-                style={{
-                  padding: '0.85rem',
-                  borderRadius: 'var(--radius-md)',
-                  backgroundColor: isSelected ? 'var(--bg-elevated)' : 'var(--bg-card)',
-                  border: isSelected ? `1.5px solid ${zone.color}` : '1px solid var(--border-subtle)',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s ease',
-                  boxShadow: isSelected ? `0 4px 16px ${zone.color}20` : 'none',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
-                  <span
-                    className="mono"
-                    style={{
-                      fontSize: '0.65rem',
-                      fontWeight: 700,
-                      padding: '0.15rem 0.45rem',
-                      borderRadius: '4px',
-                      backgroundColor: `${zone.color}20`,
-                      color: zone.color,
-                    }}
-                  >
-                    Risk Score {zone.riskScore}/100
-                  </span>
-                  {zone.escalatedToHEI && (
+        {/* Dynamic Hotspot Clusters List */}
+        {dynamicZones.length === 0 ? (
+          <div
+            style={{
+              padding: '1.5rem',
+              borderRadius: 'var(--radius-md)',
+              backgroundColor: 'var(--bg-card)',
+              border: '1px dashed var(--border-subtle)',
+              textAlign: 'center',
+              color: 'var(--text-muted)',
+              fontSize: '0.78125rem',
+            }}
+          >
+            <MapPin size={24} style={{ margin: '0 auto 0.5rem', opacity: 0.5 }} />
+            <p style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.25rem' }}>
+              No Hotspots Detected
+            </p>
+            <p style={{ fontSize: '0.72rem' }}>
+              Geotagged reports submitted by citizens will cluster and appear here dynamically.
+            </p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+            {dynamicZones.map((zone) => {
+              const isSelected = activeZone?.id === zone.id;
+              return (
+                <div
+                  key={zone.id}
+                  onClick={() => setSelectedZoneId(zone.id)}
+                  style={{
+                    padding: '0.85rem',
+                    borderRadius: 'var(--radius-md)',
+                    backgroundColor: isSelected ? 'var(--bg-elevated)' : 'var(--bg-card)',
+                    border: isSelected ? `1.5px solid ${zone.color}` : '1px solid var(--border-subtle)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    boxShadow: isSelected ? `0 4px 16px ${zone.color}20` : 'none',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
                     <span
+                      className="mono"
                       style={{
-                        fontSize: '0.625rem',
+                        fontSize: '0.65rem',
                         fontWeight: 700,
-                        color: 'var(--accent-indigo)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.2rem',
+                        padding: '0.15rem 0.45rem',
+                        borderRadius: '4px',
+                        backgroundColor: `${zone.color}20`,
+                        color: zone.color,
                       }}
                     >
-                      <Layers size={11} /> HEI Escalated
+                      Priority Score {zone.riskScore}/100
                     </span>
-                  )}
-                </div>
+                    {zone.escalatedToHEI && (
+                      <span
+                        style={{
+                          fontSize: '0.625rem',
+                          fontWeight: 700,
+                          color: 'var(--accent-indigo)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.2rem',
+                        }}
+                      >
+                        <Layers size={11} /> HEI Escalated
+                      </span>
+                    )}
+                  </div>
 
-                <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
-                  {zone.name}
-                </div>
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                    {zone.name}
+                  </div>
 
-                <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.35, marginBottom: '0.4rem' }}>
-                  {zone.chronicType}
-                </p>
+                  <p style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', lineHeight: 1.35, marginBottom: '0.4rem' }}>
+                    {zone.chronicType}
+                  </p>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
-                  <span>📍 {zone.ward.split('(')[0]}</span>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{zone.activeIncidents} Active Grievances</span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
+                    <span>📍 {zone.ward}</span>
+                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{zone.activeIncidents} Active Grievances</span>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

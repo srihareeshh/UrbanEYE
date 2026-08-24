@@ -187,10 +187,10 @@ export const MunicipalDashboard: React.FC = () => {
             <Building2 size={16} color="var(--accent-amber)" />
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.35rem', color: 'var(--text-primary)' }}>
-            {municipalKPIs?.activeGrievances || reports.length}
+            {municipalKPIs?.activeGrievances ?? reports.length}
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-            Across 24 Administrative Zones
+            Across All Municipal Wards
           </div>
         </div>
 
@@ -234,10 +234,10 @@ export const MunicipalDashboard: React.FC = () => {
             <GraduationCap size={16} color="var(--accent-indigo)" />
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.35rem', color: 'var(--accent-indigo)' }}>
-            {municipalKPIs?.escalatedToHEI || 3}
+            {municipalKPIs?.escalatedToHEI ?? 0}
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-            University Capstone Teams
+            Academic Innovation Challenges
           </div>
         </div>
 
@@ -257,10 +257,10 @@ export const MunicipalDashboard: React.FC = () => {
             <Clock size={16} color="var(--accent-amber)" />
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.35rem', color: 'var(--text-primary)' }}>
-            2.8 <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-muted)' }}>Days</span>
+            {municipalKPIs?.avgTATDays ?? 0} <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--text-muted)' }}>Days</span>
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--accent-emerald)', fontWeight: 600, marginTop: '0.2rem' }}>
-            ↓ 18% Faster vs Last Month
+            Tracked Live via Work Orders
           </div>
         </div>
 
@@ -280,7 +280,7 @@ export const MunicipalDashboard: React.FC = () => {
             <ShieldCheck size={16} color="var(--accent-emerald)" />
           </div>
           <div style={{ fontSize: '1.75rem', fontWeight: 800, marginTop: '0.35rem', color: 'var(--accent-emerald)' }}>
-            {municipalKPIs?.slaCompliancePct || 91.4}%
+            {municipalKPIs?.slaCompliancePct ?? 100}%
           </div>
           <div style={{ fontSize: '0.6875rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
             Target Benchmark: 90.0%
@@ -590,10 +590,10 @@ export const MunicipalDashboard: React.FC = () => {
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
                         <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          Civic Priority: <strong>{issue.civic_priority_score || 75}/100</strong>
+                          Civic Priority: <strong>{issue.civic_priority_score ?? 60}/100</strong>
                         </span>
                         <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                          👍 {issue.upvote_count || 12} Upvotes
+                          👍 {issue.upvote_count ?? 0} Upvotes
                         </span>
                       </div>
                     </div>
@@ -604,7 +604,7 @@ export const MunicipalDashboard: React.FC = () => {
                         {issue.category}: {issue.description}
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                        <span>📍 {issue.address || 'Ward 14 West, Mumbai'}</span>
+                        <span>📍 {issue.address || issue.city || 'Geotagged Municipal Ward'}</span>
                         <span>⏱ Status: <strong style={{ color: 'var(--accent-amber)' }}>{issue.status}</strong></span>
                         {issue.assignment && (
                           <span>👷 Designated: <strong>{issue.assignment.officer_name}</strong> ({issue.assignment.department_name.split('(')[0]})</span>
@@ -631,7 +631,45 @@ export const MunicipalDashboard: React.FC = () => {
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         {/* Two-Path Action Trigger */}
-                        {!isCompleted && (
+                        {isHEI ? (
+                          <button
+                            type="button"
+                            onClick={() => setTriageIssue(issue)}
+                            className="btn btn-sm"
+                            style={{
+                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                              border: '1px solid var(--accent-indigo)',
+                              color: 'var(--accent-indigo)',
+                              fontWeight: 700,
+                              fontSize: '0.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                            }}
+                          >
+                            <GraduationCap size={13} />
+                            <span>HEI Research Track Active</span>
+                          </button>
+                        ) : isCompleted || isPendingDualSignoff || issue.assignment || issue.resolution ? (
+                          <button
+                            type="button"
+                            onClick={() => setTriageIssue(issue)}
+                            className="btn btn-sm"
+                            style={{
+                              backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                              border: '1px solid var(--accent-indigo)',
+                              color: 'var(--accent-indigo)',
+                              fontWeight: 700,
+                              fontSize: '0.75rem',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem',
+                            }}
+                          >
+                            <GraduationCap size={13} />
+                            <span>Escalate to HEI (Path B) →</span>
+                          </button>
+                        ) : (
                           <button
                             type="button"
                             onClick={() => setTriageIssue(issue)}
@@ -648,7 +686,7 @@ export const MunicipalDashboard: React.FC = () => {
                             }}
                           >
                             <Wrench size={13} />
-                            <span>Triage / Escalate</span>
+                            <span>Triage Issue</span>
                           </button>
                         )}
 
@@ -711,63 +749,79 @@ export const MunicipalDashboard: React.FC = () => {
               Zonal Ward SLA Compliance Performance
             </h3>
             <p style={{ fontSize: '0.78125rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-              Real-time turnaround metrics tracked under Public Service Guarantee Standards.
+              Real-time turnaround metrics tracked under Public Service Guarantee Standards from citizen reports.
             </p>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-              {[
-                { ward: 'Ward 14 West (Bandra/Khar)', active: 6, resolved: 14, highSeverity: 4, compliance: 94.2 },
-                { ward: 'Ward 08 Central (Dadar)', active: 5, resolved: 11, highSeverity: 3, compliance: 89.0 },
-                { ward: 'Ward 12 South (Fort/Colaba)', active: 3, resolved: 9, highSeverity: 1, compliance: 96.5 },
-                { ward: 'Ward 19 East (Kurla/Chembur)', active: 8, resolved: 12, highSeverity: 5, compliance: 86.1 },
-              ].map((w) => (
-                <div
-                  key={w.ward}
-                  style={{
-                    padding: '1rem',
-                    borderRadius: 'var(--radius-md)',
-                    backgroundColor: 'var(--bg-elevated)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                >
-                  <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
-                    {w.ward}
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
-                    <span>SLA Compliance Rate:</span>
-                    <strong style={{ color: w.compliance >= 90 ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
-                      {w.compliance}%
-                    </strong>
-                  </div>
-
-                  {/* Progress bar */}
+            {(!municipalKPIs?.wards || municipalKPIs.wards.length === 0) ? (
+              <div
+                style={{
+                  padding: '2.5rem 1.5rem',
+                  borderRadius: 'var(--radius-md)',
+                  backgroundColor: 'var(--bg-elevated)',
+                  border: '1px dashed var(--border-subtle)',
+                  textAlign: 'center',
+                  color: 'var(--text-muted)',
+                }}
+              >
+                <Building2 size={32} style={{ margin: '0 auto 0.75rem', opacity: 0.5 }} />
+                <p style={{ fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                  No Active Ward Analytics
+                </p>
+                <p style={{ fontSize: '0.78125rem' }}>
+                  When citizens submit reports in different wards, live SLA compliance statistics will generate here.
+                </p>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
+                {municipalKPIs.wards.map((w) => (
                   <div
+                    key={w.ward}
                     style={{
-                      height: '6px',
-                      borderRadius: '3px',
-                      backgroundColor: 'var(--bg-card)',
-                      overflow: 'hidden',
-                      marginBottom: '0.75rem',
+                      padding: '1rem',
+                      borderRadius: 'var(--radius-md)',
+                      backgroundColor: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
                     }}
                   >
+                    <div style={{ fontSize: '0.875rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '0.5rem' }}>
+                      {w.ward}
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '0.35rem' }}>
+                      <span>SLA Compliance Rate:</span>
+                      <strong style={{ color: w.compliance >= 90 ? 'var(--accent-emerald)' : 'var(--accent-amber)' }}>
+                        {w.compliance}%
+                      </strong>
+                    </div>
+
+                    {/* Progress bar */}
                     <div
                       style={{
-                        width: `${w.compliance}%`,
-                        height: '100%',
-                        backgroundColor: w.compliance >= 90 ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+                        height: '6px',
+                        borderRadius: '3px',
+                        backgroundColor: 'var(--bg-card)',
+                        overflow: 'hidden',
+                        marginBottom: '0.75rem',
                       }}
-                    />
-                  </div>
+                    >
+                      <div
+                        style={{
+                          width: `${w.compliance}%`,
+                          height: '100%',
+                          backgroundColor: w.compliance >= 90 ? 'var(--accent-emerald)' : 'var(--accent-amber)',
+                        }}
+                      />
+                    </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                    <span>Active: {w.active}</span>
-                    <span>Resolved: {w.resolved}</span>
-                    <span style={{ color: 'var(--accent-rose)' }}>High Severity: {w.highSeverity}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                      <span>Active: {w.active}</span>
+                      <span>Resolved: {w.resolved}</span>
+                      <span style={{ color: 'var(--accent-rose)' }}>High Severity: {w.highSeverity}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

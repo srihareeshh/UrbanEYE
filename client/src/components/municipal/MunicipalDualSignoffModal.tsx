@@ -47,16 +47,16 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
       resolvedBy,
       resolutionPhotoUrl: photoUrl,
       resolutionPhotoName: photoName,
-      latitude: issue.latitude || 19.0760,
-      longitude: issue.longitude || 72.8777,
+      latitude: issue.latitude || 19.076,
+      longitude: issue.longitude || 72.877,
     });
     setSubmitting(false);
 
     if (success) {
-      onShowToast(`✓ Remediation proof uploaded! Issue moved to "Citizen Confirmation" state.`);
+      onShowToast('✓ Remediation proof uploaded! Notification sent to reporting citizen for sign-off.');
       onClose();
     } else {
-      onShowToast('Failed to upload resolution proof.');
+      onShowToast('Failed to record dual-signoff resolution.');
     }
   };
 
@@ -84,7 +84,7 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
           border: '1px solid var(--border-medium)',
           borderRadius: 'var(--radius-xl)',
           width: '100%',
-          maxWidth: '640px',
+          maxWidth: '620px',
           maxHeight: '90vh',
           display: 'flex',
           flexDirection: 'column',
@@ -106,8 +106,8 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
             <div
               style={{
-                width: '36px',
-                height: '36px',
+                width: '34px',
+                height: '34px',
                 borderRadius: '8px',
                 backgroundColor: 'rgba(16, 185, 129, 0.15)',
                 color: 'var(--accent-emerald)',
@@ -116,27 +116,27 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
                 justifyContent: 'center',
               }}
             >
-              <FileCheck size={20} />
+              <FileCheck size={18} />
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 800 }}>Upload Field Crew Remediation Proof</h3>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 800 }}>Field Crew Remediation Proof</h3>
                 <span
                   className="mono"
                   style={{
                     fontSize: '0.6875rem',
                     padding: '0.1rem 0.45rem',
                     borderRadius: '4px',
-                    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                    backgroundColor: 'var(--bg-card)',
                     color: 'var(--accent-emerald)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    border: '1px solid var(--border-subtle)',
                   }}
                 >
-                  Dual Sign-off Protocol
+                  Dual-Signoff Phase
                 </span>
               </div>
               <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Field crew photo & GPS stamp moves grievance into "Citizen Confirmation" before final closure.
+                Upload post-repair photographic evidence to trigger original citizen verification.
               </p>
             </div>
           </div>
@@ -258,20 +258,20 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
           {/* Information Notice */}
           <div
             style={{
-              padding: '0.75rem 0.85rem',
+              padding: '0.75rem',
               borderRadius: 'var(--radius-md)',
               backgroundColor: 'rgba(16, 185, 129, 0.08)',
-              border: '1px solid rgba(16, 185, 129, 0.25)',
+              border: '1px solid rgba(16, 185, 129, 0.2)',
+              fontSize: '0.72rem',
+              color: 'var(--text-secondary)',
               display: 'flex',
               alignItems: 'center',
               gap: '0.5rem',
-              fontSize: '0.72rem',
-              color: 'var(--accent-emerald)',
             }}
           >
-            <UserCheck size={16} />
+            <UserCheck size={18} color="var(--accent-emerald)" />
             <span>
-              <strong>Dual Sign-off Protocol:</strong> Submitting this field report transitions grievance to "Citizen Confirmation". Reporting citizen has 72 hours to verify resolution quality or request crew re-dispatch.
+              Submitting transitions status to <strong>Pending Citizen Sign-off</strong>. The original reporter will receive an in-app ping to verify and rate before closure.
             </span>
           </div>
 
@@ -283,15 +283,15 @@ export const MunicipalDualSignoffModal: React.FC<MunicipalDualSignoffModalProps>
               backgroundColor: 'var(--accent-emerald)',
               color: '#000',
               fontWeight: 800,
-              marginTop: '0.25rem',
+              marginTop: '0.5rem',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '0.5rem',
             }}
           >
-            <CheckCircle2 size={18} />
-            <span>{submitting ? 'Uploading Proof...' : 'Submit Resolution Proof for Citizen Verification'}</span>
+            <CheckCircle2 size={16} />
+            <span>{submitting ? 'Submitting Proof...' : 'Submit Proof & Request Citizen Sign-off'}</span>
           </button>
         </form>
       </div>

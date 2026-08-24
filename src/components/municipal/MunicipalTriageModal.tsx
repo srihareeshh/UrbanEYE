@@ -54,7 +54,14 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
 }) => {
   if (!issue) return null;
 
-  const [activePath, setActivePath] = useState<'routine' | 'hei'>('routine');
+  const isRoutineCompleted = !!(
+    issue.assignment ||
+    issue.resolution ||
+    (issue.verifications && issue.verifications.length > 0) ||
+    ['Citizen Confirmation', 'Confirmed Resolved', 'Resolved', 'In Progress'].includes(issue.status)
+  );
+
+  const [activePath, setActivePath] = useState<'routine' | 'hei'>(isRoutineCompleted ? 'hei' : 'routine');
   const [submitting, setSubmitting] = useState(false);
 
   // Path A: Routine Work Order State
@@ -62,13 +69,13 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
   const [targetHours, setTargetHours] = useState(DEPARTMENTS[0].defaultSLA);
   const [priority, setPriority] = useState('High');
   const [crewNotes, setCrewNotes] = useState(
-    `Deploy Ward 14 maintenance team to inspect and repair ${issue.category.toLowerCase()} issue within scheduled SLA window.`
+    `Deploy maintenance team to inspect and repair ${issue.category.toLowerCase()} issue within scheduled SLA window.`
   );
 
   // Path B: HEI Escalation State
   const [selectedHeiIndex, setSelectedHeiIndex] = useState(0);
   const [researchBrief, setResearchBrief] = useState(
-    `Recurring structural challenge identified in ${issue.address || 'Ward 14'}. Seeking multidisciplinary capstone team to develop scalable working prototype.`
+    `Recurring structural challenge identified in ${issue.address || issue.city || 'Municipal Ward'}. Seeking multidisciplinary capstone team to develop scalable working prototype.`
   );
 
   const handleRoutineSubmit = async (e: React.FormEvent) => {
@@ -161,18 +168,20 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                 width: '34px',
                 height: '34px',
                 borderRadius: '8px',
-                backgroundColor: 'rgba(245, 158, 11, 0.15)',
-                color: 'var(--accent-amber)',
+                backgroundColor: isRoutineCompleted ? 'rgba(99, 102, 241, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                color: isRoutineCompleted ? 'var(--accent-indigo)' : 'var(--accent-amber)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
             >
-              <Building2 size={18} />
+              {isRoutineCompleted ? <GraduationCap size={18} /> : <Building2 size={18} />}
             </div>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                <h3 style={{ fontSize: '1.05rem', fontWeight: 800 }}>Municipal Triage Action Portal</h3>
+                <h3 style={{ fontSize: '1.05rem', fontWeight: 800 }}>
+                  {isRoutineCompleted ? 'HEI Innovation Escalation Portal' : 'Municipal Triage Action Portal'}
+                </h3>
                 <span
                   className="mono"
                   style={{
@@ -180,7 +189,7 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                     padding: '0.1rem 0.45rem',
                     borderRadius: '4px',
                     backgroundColor: 'var(--bg-card)',
-                    color: 'var(--accent-amber)',
+                    color: 'var(--text-muted)',
                     border: '1px solid var(--border-subtle)',
                   }}
                 >
@@ -188,14 +197,17 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                 </span>
               </div>
               <p style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Select remediation path: Routine Municipal Crew Dispatch vs. Academic HEI R&D Escalation
+                {isRoutineCompleted
+                  ? 'Routine repair complete. Escalating to Academic Capstone Innovation Exchange.'
+                  : 'Select Routine Maintenance Dispatch (Path A) or HEI Innovation Escalation (Path B).'}
               </p>
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="btn btn-ghost"
-            style={{ padding: '0.4rem', borderRadius: '50%' }}
+            className="btn btn-ghost btn-sm"
+            style={{ padding: '0.35rem' }}
           >
             <X size={18} />
           </button>
@@ -230,6 +242,20 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                 >
                   AI Severity: {issue.severity}
                 </span>
+                {isRoutineCompleted && (
+                  <span
+                    style={{
+                      fontSize: '0.65rem',
+                      fontWeight: 700,
+                      padding: '0.1rem 0.45rem',
+                      borderRadius: '4px',
+                      backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                      color: 'var(--accent-emerald)',
+                    }}
+                  >
+                    ✓ Routine Signed Off
+                  </span>
+                )}
               </div>
               <span className="mono" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
                 Civic Priority: {issue.civic_priority_score || 75}/100
@@ -239,7 +265,7 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
               {issue.description}
             </p>
             <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-              📍 {issue.address || 'Ward 14 West, Mumbai'}
+              📍 {issue.address || issue.city || 'Municipal Ward'}
             </div>
           </div>
 
@@ -273,10 +299,11 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                 fontSize: '0.8125rem',
                 cursor: 'pointer',
                 transition: 'all 0.2s ease',
+                opacity: isRoutineCompleted ? 0.75 : 1,
               }}
             >
               <Wrench size={16} />
-              <span>Path A: Routine Work Order</span>
+              <span>Path A: Routine Work Order {isRoutineCompleted ? '(Done ✓)' : ''}</span>
             </button>
 
             <button
@@ -296,10 +323,11 @@ export const MunicipalTriageModal: React.FC<MunicipalTriageModalProps> = ({
                 fontSize: '0.8125rem',
                 cursor: 'pointer',
                 transition: 'all 0.2s ease',
+                boxShadow: isRoutineCompleted && activePath === 'hei' ? '0 0 12px rgba(99, 102, 241, 0.25)' : 'none',
               }}
             >
               <GraduationCap size={16} />
-              <span>Path B: Escalate to HEI R&D</span>
+              <span>Path B: Escalate to HEI {isRoutineCompleted ? '(Recommended)' : ''}</span>
             </button>
           </div>
 

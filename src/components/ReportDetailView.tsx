@@ -10,6 +10,7 @@ import {
   BellOff,
   Navigation,
   Users,
+  GraduationCap,
 } from 'lucide-react';
 import { LifecycleStepper } from './LifecycleStepper';
 import { ActivityTimeline } from './ActivityTimeline';
@@ -17,6 +18,7 @@ import { AssignmentCard } from './AssignmentCard';
 import { BeforeAfterViewer } from './BeforeAfterViewer';
 import { CitizenVerification } from './CitizenVerification';
 import { AuthoritySimulator } from './AuthoritySimulator';
+import { HEIInnovationTrack } from './HEIInnovationTrack';
 import type { StoredReport, VerificationInfo } from '../types';
 import { formatBytes } from '../utils/exifHelper';
 import { apiFetch } from '../utils/userSession';
@@ -257,6 +259,25 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
               </span>
               <span className="badge badge-amber">{report.category}</span>
               <span className="badge badge-indigo">Priority: {report.civic_priority_score}/100</span>
+              {(report.is_escalated_to_hei || report.hei_challenge || report.hei_project) && (
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '0.15rem 0.55rem',
+                    borderRadius: '12px',
+                    backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                    color: 'var(--accent-indigo)',
+                    border: '1px solid rgba(99, 102, 241, 0.4)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.3rem',
+                  }}
+                >
+                  <GraduationCap size={13} />
+                  HEI Capstone Track Active
+                </span>
+              )}
             </div>
             <div style={{ fontSize: '0.78125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
               Reported on {new Date(report.created_at).toLocaleString()} by Citizen Reporter
@@ -385,7 +406,16 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
         />
       )}
 
-      {/* 4. Before / After Resolution Photo Comparison (If Resolution Evidence Present) */}
+      {/* 4. Parallel HEI Innovation & Academic Capstone Track (Side-by-side Dual Lifecycle) */}
+      {(report.is_escalated_to_hei || report.hei_challenge || report.hei_project) && (
+        <HEIInnovationTrack
+          challenge={report.hei_challenge}
+          project={report.hei_project}
+          reportCode={report.report_code}
+        />
+      )}
+
+      {/* 5. Before / After Resolution Photo Comparison (If Resolution Evidence Present) */}
       {primaryCitizenPhoto && resolutionPhoto && (
         <BeforeAfterViewer
           beforeUrl={primaryCitizenPhoto}

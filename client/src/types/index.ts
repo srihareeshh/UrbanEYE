@@ -196,6 +196,9 @@ export interface StoredReport {
   assignment?: AssignmentInfo | null;
   resolution?: ResolutionInfo | null;
   verifications?: VerificationInfo[];
+  is_escalated_to_hei?: boolean;
+  hei_challenge?: HEIChallenge | null;
+  hei_project?: HEIProject | null;
 }
 
 export interface UserActivityData {

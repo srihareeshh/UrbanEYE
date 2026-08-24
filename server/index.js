@@ -4,525 +4,107 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 import exifr from 'exifr';
-import db, { initDatabase } from './db.js';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
+import { db, initDatabase } from './db.js';
+import { clusterReportsByProximity, detectCivicHotspots, detectSystemicPatterns } from './hotspots.js';
 
+// Setup environment and paths
+dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Initialize Database schema with Phase 2 extensions
-initDatabase();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Uploads directory setup
+// Enable CORS and JSON body parser
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve uploaded files statically
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
+app.use('/uploads', express.static(uploadsDir));
 
-// Sample test images directory
+// Serve sample incident photos statically
 const samplesDir = path.join(__dirname, 'samples');
-if (!fs.existsSync(samplesDir)) {
-  fs.mkdirSync(samplesDir, { recursive: true });
+if (fs.existsSync(samplesDir)) {
+  app.use('/samples', express.static(samplesDir));
 }
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Static file serving for uploads and samples
-app.use('/uploads', express.static(uploadsDir));
-app.use('/samples', express.static(samplesDir));
-
-// Multer storage configuration
+// Multer Storage Configuration
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '';
-    const safeName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}${ext}`;
-    cb(null, safeName);
-  },
-});
-
-// File filter for images, videos, and audio
-const fileFilter = (req, file, cb) => {
-  const allowedMimes = [
-    // Images
-    'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/gif',
-    // Videos
-    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska',
-    // Audio
-    'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/aac', 'audio/x-m4a'
-  ];
-
-  if (allowedMimes.includes(file.mimetype) || file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype.startsWith('audio/')) {
-    cb(null, true);
-  } else {
-    cb(new Error(`Unsupported file type: ${file.mimetype}`), false);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const ext = path.extname(file.originalname);
+    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
   }
-};
+});
 
 const upload = multer({
   storage,
-  fileFilter,
-  limits: { fileSize: 100 * 1024 * 1024 } // 100 MB max
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
 });
 
-function getMediaType(mimetype) {
-  if (mimetype.startsWith('image/')) return 'image';
-  if (mimetype.startsWith('video/')) return 'video';
-  if (mimetype.startsWith('audio/')) return 'audio';
-  return 'other';
+// Helper for parsing JSON safely from PostgreSQL JSONB / string
+function parseJsonSafe(val, fallback = null) {
+  if (val === null || val === undefined) return fallback;
+  if (typeof val === 'object') return val;
+  try {
+    return JSON.parse(val);
+  } catch (e) {
+    return fallback;
+  }
 }
 
-function calculateCivicPriority({ category, severity, recurrence, duration, is_risk_present }) {
-  let score = 20;
+// -------------------------------------------------------------
+// Priority Scoring Engine & Department Rules
+// -------------------------------------------------------------
+function calculateCivicPriorityScore(params) {
+  let score = 30; // base score
+  const { severity, isRiskPresent, recurrence, category } = params;
+
   if (severity === 'Dangerous') score += 35;
-  else if (severity === 'Serious') score += 25;
-  else if (severity === 'Moderate') score += 15;
-  else if (severity === 'Low') score += 5;
+  else if (severity === 'Serious') score += 20;
+  else if (severity === 'Moderate') score += 10;
 
-  if (is_risk_present) score += 20;
+  if (isRiskPresent === 1 || isRiskPresent === true || isRiskPresent === '1' || isRiskPresent === 'true') {
+    score += 25;
+  }
 
-  const highImpactCategories = ['Electricity', 'Water', 'Sanitation', 'Roads', 'Schools'];
-  if (highImpactCategories.includes(category)) score += 15;
-  else score += 8;
+  if (recurrence === 'Continuous') score += 15;
+  else if (recurrence === 'Intermittent') score += 8;
 
-  if (recurrence === 'Almost always') score += 15;
-  else if (recurrence === 'Frequently') score += 10;
-  else if (recurrence === 'Sometimes') score += 5;
+  if (['Water', 'Electricity', 'Health'].includes(category)) score += 10;
+  if (category === 'Schools') score += 8;
 
-  if (duration === 'A few months' || duration === 'Longer') score += 15;
-  else if (duration === 'A few weeks') score += 10;
-  else if (duration === 'A few days') score += 5;
-
-  return Math.min(100, Math.max(10, score));
+  return Math.min(100, Math.max(1, score));
 }
 
-// Department recommendation mapper based on category
 function getDepartmentForCategory(category) {
   switch (category) {
     case 'Water':
-      return {
-        dept: 'Water Supply & Sewerage Board (Drainage Division)',
-        officer: 'Eng. R. Shinde',
-        slaHours: 24,
-      };
+      return { dept: 'Water Supply & Sewerage Board', officer: 'Eng. R. Shinde', slaHours: 24 };
     case 'Roads':
-      return {
-        dept: 'Roads & Transit Infrastructure Wing',
-        officer: 'Insp. A. Kulkarni',
-        slaHours: 48,
-      };
+      return { dept: 'Roads & Traffic Infrastructure', officer: 'Chief Insp. P. Kulkarni', slaHours: 48 };
     case 'Electricity':
-      return {
-        dept: 'Power Distribution & Emergency Grid Wing',
-        officer: 'Eng. V. Nair',
-        slaHours: 12,
-      };
-    case 'Sanitation':
-      return {
-        dept: 'Solid Waste Management & Sanitation Dept',
-        officer: 'Supervisor S. Patil',
-        slaHours: 24,
-      };
+      return { dept: 'Municipal Power Distribution Utility', officer: 'Line Eng. A. Verma', slaHours: 12 };
     case 'Schools':
-      return {
-        dept: 'Department of Public School Infrastructure',
-        officer: 'Officer M. Fernandes',
-        slaHours: 36,
-      };
+      return { dept: 'Civic Education & Infrastructure Board', officer: 'Director S. Nair', slaHours: 72 };
+    case 'Sanitation':
+    case 'Solid Waste':
+      return { dept: 'Solid Waste Management & Sanitation', officer: 'Sanitary Insp. V. Jadhav', slaHours: 24 };
     default:
-      return {
-        dept: 'Municipal Engineering & Public Works Division',
-        officer: 'Duty Officer K. Sharma',
-        slaHours: 48,
-      };
+      return { dept: 'General Municipal Engineering Works', officer: 'Zonal Officer M. Khan', slaHours: 48 };
   }
 }
-
-// ==========================================
-// API ROUTES
-// ==========================================
-
-// 1. Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'healthy',
-    system: 'Alcheminds Engine Phase 1 & 2 (Lifecycle Active)',
-    time: new Date().toISOString(),
-    database: 'connected'
-  });
-});
-
-// 2. Upload Media Endpoint
-app.post('/api/upload', upload.array('files', 10), async (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ error: 'No files were uploaded.' });
-    }
-
-    const processedFiles = await Promise.all(
-      req.files.map(async (file) => {
-        const mediaType = getMediaType(file.mimetype);
-        let exifData = null;
-        let gps = null;
-
-        if (mediaType === 'image') {
-          try {
-            const fullExif = await exifr.parse(file.path, {
-              gps: true,
-              tiff: true,
-              exif: true,
-              iptc: true,
-              xmp: true
-            });
-
-            if (fullExif) {
-              exifData = {
-                make: fullExif.Make || null,
-                model: fullExif.Model || null,
-                dateTimeOriginal: fullExif.DateTimeOriginal || fullExif.CreateDate || null,
-                orientation: fullExif.Orientation || null,
-                software: fullExif.Software || null,
-                exposureTime: fullExif.ExposureTime || null,
-                fNumber: fullExif.FNumber || null,
-                iso: fullExif.ISO || null,
-              };
-
-              if (fullExif.latitude !== undefined && fullExif.longitude !== undefined) {
-                gps = {
-                  latitude: Number(fullExif.latitude),
-                  longitude: Number(fullExif.longitude),
-                  altitude: fullExif.GPSAltitude ? Number(fullExif.GPSAltitude) : null,
-                  source: 'exif'
-                };
-              }
-            }
-          } catch (exifErr) {
-            console.warn('EXIF parsing warning for', file.originalname, exifErr.message);
-          }
-        }
-
-        return {
-          mediaId: `med_${crypto.randomBytes(8).toString('hex')}`,
-          fileName: file.filename,
-          originalName: file.originalname,
-          filePath: `/uploads/${file.filename}`,
-          mimeType: file.mimetype,
-          fileSize: file.size,
-          mediaType,
-          exif: exifData,
-          gps
-        };
-      })
-    );
-
-    res.json({
-      success: true,
-      files: processedFiles
-    });
-  } catch (error) {
-    console.error('Upload Error:', error);
-    res.status(500).json({ error: 'Failed to process and store media.' });
-  }
-});
-
-// 3. Create & Persist Report (With Initial Timeline Event)
-app.post('/api/reports', upload.any(), async (req, res) => {
-  try {
-    const {
-      category,
-      description = '',
-      duration = 'Today',
-      recurrence = 'First time',
-      severity = 'Moderate',
-      isRiskPresent,
-      is_risk_present,
-      riskDescription,
-      risk_description,
-      smartSuggested,
-      smart_suggested,
-      extraContext = {}
-    } = req.body;
-
-    const safeCategory = category || req.body.category;
-    if (!safeCategory || typeof safeCategory !== 'string' || !safeCategory.trim()) {
-      return res.status(400).json({ error: 'Issue category is required.' });
-    }
-
-    const safeDescription = description || req.body.description || '';
-
-    // Extract location fields (supports both flat FormData fields and nested JSON location object)
-    let lat = req.body.latitude !== undefined && req.body.latitude !== '' 
-      ? Number(req.body.latitude) 
-      : (req.body.location?.latitude !== undefined ? Number(req.body.location.latitude) : NaN);
-    let lng = req.body.longitude !== undefined && req.body.longitude !== '' 
-      ? Number(req.body.longitude) 
-      : (req.body.location?.longitude !== undefined ? Number(req.body.location.longitude) : NaN);
-
-    // Fallback default coordinates if not provided
-    if (isNaN(lat) || isNaN(lng)) {
-      lat = 19.0760;
-      lng = 72.8777;
-    }
-
-    const locationSource = req.body.location_source || req.body.location?.source || 'manual';
-    const locationAccuracy = req.body.location_accuracy ? Number(req.body.location_accuracy) : (req.body.location?.accuracy ? Number(req.body.location.accuracy) : null);
-    const address = req.body.address || req.body.location?.address || 'Mumbai, Maharashtra';
-    const city = req.body.city || req.body.location?.city || 'Mumbai';
-    const state = req.body.state || req.body.location?.state || 'Maharashtra';
-    const postalCode = req.body.postal_code || req.body.postalCode || req.body.location?.postalCode || null;
-
-    const safeIsRiskPresent = isRiskPresent === true || isRiskPresent === 'true' || is_risk_present === true || is_risk_present === 'true';
-    const safeRiskDescription = riskDescription || risk_description || '';
-    const safeSmartSuggested = smartSuggested === true || smartSuggested === 'true' || smart_suggested === true || smart_suggested === 'true';
-
-    // Parse extraContext if passed as JSON string
-    let parsedExtraContext = {};
-    if (typeof extraContext === 'string') {
-      try { parsedExtraContext = JSON.parse(extraContext); } catch (e) { parsedExtraContext = {}; }
-    } else if (typeof extraContext === 'object' && extraContext !== null) {
-      parsedExtraContext = extraContext;
-    }
-
-    // Process all uploaded files (multipart req.files)
-    const mediaToInsert = [];
-    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-      for (const file of req.files) {
-        const mediaType = getMediaType(file.mimetype);
-        let exifData = null;
-        if (mediaType === 'image') {
-          try {
-            const fullExif = await exifr.parse(file.path, { gps: true, tiff: true, exif: true });
-            if (fullExif) {
-              exifData = {
-                make: fullExif.Make || null,
-                model: fullExif.Model || null,
-                dateTimeOriginal: fullExif.DateTimeOriginal || fullExif.CreateDate || null,
-              };
-            }
-          } catch (exifErr) {
-            console.warn('EXIF parsing note for upload:', exifErr.message);
-          }
-        }
-        mediaToInsert.push({
-          mediaId: `med_${crypto.randomBytes(8).toString('hex')}`,
-          fileName: file.filename,
-          originalName: file.originalname,
-          filePath: `/uploads/${file.filename}`,
-          mimeType: file.mimetype,
-          fileSize: file.size,
-          mediaType,
-          exif: exifData
-        });
-      }
-    }
-
-    // Also include any media passed as JSON array in req.body.media
-    if (req.body.media) {
-      let extraMedia = [];
-      if (typeof req.body.media === 'string') {
-        try { extraMedia = JSON.parse(req.body.media); } catch (e) {}
-      } else if (Array.isArray(req.body.media)) {
-        extraMedia = req.body.media;
-      }
-      if (Array.isArray(extraMedia)) {
-        mediaToInsert.push(...extraMedia);
-      }
-    }
-
-    const reportId = `rep_${crypto.randomBytes(8).toString('hex')}`;
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const reportCode = `ALC-${new Date().getFullYear()}-${randomSuffix}`;
-    const userId = req.body.userId || `usr_${crypto.randomBytes(6).toString('hex')}`;
-
-    const priorityScore = calculateCivicPriority({
-      category: safeCategory,
-      severity,
-      recurrence,
-      duration,
-      is_risk_present: safeIsRiskPresent
-    });
-
-    const insertReportTx = db.transaction(() => {
-      // 1. User
-      db.prepare(`
-        INSERT OR IGNORE INTO users (id, session_token, name)
-        VALUES (?, ?, ?)
-      `).run(userId, `sess_${userId}`, 'Citizen Reporter');
-
-      // 2. Report
-      db.prepare(`
-        INSERT INTO reports (
-          id, report_code, user_id, category, description, duration, recurrence,
-          severity, is_risk_present, risk_description, status, civic_priority_score,
-          created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Submitted', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
-        reportId,
-        reportCode,
-        userId,
-        safeCategory,
-        safeDescription,
-        duration,
-        recurrence,
-        severity,
-        safeIsRiskPresent ? 1 : 0,
-        safeRiskDescription || null,
-        priorityScore
-      );
-
-      // 3. Location
-      db.prepare(`
-        INSERT INTO report_location (
-          id, report_id, latitude, longitude, location_source, accuracy, address, city, state, postal_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        `loc_${crypto.randomBytes(6).toString('hex')}`,
-        reportId,
-        lat,
-        lng,
-        locationSource,
-        locationAccuracy,
-        address,
-        city,
-        state,
-        postalCode
-      );
-
-      // 4. Issue Details
-      db.prepare(`
-        INSERT INTO issue_details (
-          id, report_id, category, duration, recurrence, severity, smart_suggested, extra_context_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        `iss_${crypto.randomBytes(6).toString('hex')}`,
-        reportId,
-        safeCategory,
-        duration,
-        recurrence,
-        severity,
-        safeSmartSuggested ? 1 : 0,
-        JSON.stringify(parsedExtraContext)
-      );
-
-      // 5. Media & Metadata
-      const mediaStmt = db.prepare(`
-        INSERT INTO report_media (
-          id, report_id, media_type, original_name, file_name, file_path, mime_type, file_size, duration_seconds
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-
-      const metaStmt = db.prepare(`
-        INSERT INTO report_metadata (
-          id, report_id, media_id, exif_json, device_info
-        ) VALUES (?, ?, ?, ?, ?)
-      `);
-
-      for (const item of mediaToInsert) {
-        const mediaId = item.mediaId || `med_${crypto.randomBytes(8).toString('hex')}`;
-        mediaStmt.run(
-          mediaId,
-          reportId,
-          item.mediaType || 'image',
-          item.originalName || 'uploaded_media',
-          item.fileName || path.basename(item.filePath || ''),
-          item.filePath || '',
-          item.mimeType || null,
-          item.fileSize || null,
-          item.durationSeconds || null
-        );
-
-        if (item.exif || item.deviceInfo) {
-          metaStmt.run(
-            `met_${crypto.randomBytes(6).toString('hex')}`,
-            reportId,
-            mediaId,
-            item.exif ? JSON.stringify(item.exif) : null,
-            item.deviceInfo ? JSON.stringify(item.deviceInfo) : null
-          );
-        }
-      }
-
-      // 6. Phase 2: Seed Initial Timeline Event ("Report Submitted")
-      db.prepare(`
-        INSERT INTO report_timeline (
-          id, report_id, stage, actor_type, actor_name, title, description, created_at
-        ) VALUES (?, ?, 'Submitted', 'citizen', 'Citizen Reporter', 'Report Submitted', ?, CURRENT_TIMESTAMP)
-      `).run(
-        `tml_${crypto.randomBytes(6).toString('hex')}`,
-        reportId,
-        `Report registered with priority score ${priorityScore}/100 and queued for review.`
-      );
-    });
-
-    insertReportTx();
-
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ?`).get(reportId);
-    const loc = db.prepare(`SELECT * FROM report_location WHERE report_id = ?`).get(reportId);
-    const mediaItemsResult = db.prepare(`SELECT * FROM report_media WHERE report_id = ?`).all(reportId);
-    const issueDetails = db.prepare(`SELECT * FROM issue_details WHERE report_id = ?`).get(reportId);
-    const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(reportId);
-
-    res.status(201).json({
-      success: true,
-      report: {
-        ...report,
-        location: loc,
-        media: mediaItemsResult,
-        issueDetails,
-        timeline
-      }
-    });
-  } catch (error) {
-    console.error('Report submission error:', error);
-    res.status(500).json({ error: error.message || 'Failed to persist report to database.' });
-  }
-});
-
-// 4. List All Reports
-app.get('/api/reports', (req, res) => {
-  try {
-    const reports = db.prepare(`
-      SELECT r.*, 
-             l.latitude, l.longitude, l.location_source, l.accuracy, l.address, l.city
-      FROM reports r
-      LEFT JOIN report_location l ON r.id = l.report_id
-      ORDER BY r.created_at DESC
-    `).all();
-
-    const mediaList = db.prepare(`SELECT * FROM report_media`).all();
-    const metadataList = db.prepare(`SELECT * FROM report_metadata`).all();
-    const assignmentsList = db.prepare(`SELECT * FROM report_assignments`).all();
-    const resolutionsList = db.prepare(`SELECT * FROM report_resolutions`).all();
-
-    const enriched = reports.map(r => ({
-      ...r,
-      media: mediaList.filter(m => m.report_id === r.id),
-      assignment: assignmentsList.find(a => a.report_id === r.id) || null,
-      resolution: resolutionsList.find(res => res.report_id === r.id) || null,
-      metadata: metadataList.filter(m => m.report_id === r.id).map(m => ({
-        ...m,
-        exif: m.exif_json ? JSON.parse(m.exif_json) : null
-      }))
-    }));
-
-    res.json({
-      success: true,
-      count: enriched.length,
-      reports: enriched
-    });
-  } catch (err) {
-    console.error('Fetch reports error:', err);
-    res.status(500).json({ error: 'Failed to retrieve reports.' });
-  }
-});
 
 // Haversine distance calculator in kilometers
 function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
@@ -574,85 +156,522 @@ function getApproximateLocationText(address, city, distanceKm) {
 }
 
 // In-app follower notification dispatcher
-function notifyReportFollowers(reportId, eventType, title, message, excludeUserId = null) {
+async function notifyReportFollowers(reportId, eventType, title, message, excludeUserId = null) {
   try {
-    const followers = db.prepare(`SELECT user_id FROM report_followers WHERE report_id = ?`).all(reportId);
-    const insertNotif = db.prepare(`
-      INSERT INTO user_notifications (id, user_id, report_id, event_type, title, message, is_read, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP)
-    `);
+    const followersRes = await db.query(`SELECT user_id FROM report_followers WHERE report_id = $1`, [reportId]);
+    const followers = followersRes.rows;
 
     for (const fol of followers) {
       if (excludeUserId && fol.user_id === excludeUserId) continue;
-      insertNotif.run(
-        `notif_${crypto.randomBytes(6).toString('hex')}`,
-        fol.user_id,
-        reportId,
-        eventType,
-        title,
-        message
-      );
+      await db.query(`
+        INSERT INTO user_notifications (id, user_id, report_id, event_type, title, message, is_read, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, FALSE, CURRENT_TIMESTAMP)
+      `, [`notif_${crypto.randomBytes(6).toString('hex')}`, fol.user_id, reportId, eventType, title, message]);
     }
   } catch (e) {
     console.warn('Failed to dispatch follower notifications:', e.message);
   }
 }
 
-// 5. Get Individual Report & Full Lifecycle Details
-app.get('/api/reports/:id', (req, res) => {
+// ==========================================
+// 1. HEALTH CHECK & DATABASE STATUS
+// ==========================================
+app.get('/api/health', async (req, res) => {
+  try {
+    const dbTest = await db.query('SELECT NOW() as current_time, COUNT(*) as report_count FROM reports');
+    res.json({
+      status: 'ok',
+      database: 'PostgreSQL',
+      currentTime: dbTest.rows[0]?.current_time,
+      reportCount: parseInt(dbTest.rows[0]?.report_count || '0', 10),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({
+      status: 'error',
+      database: 'PostgreSQL connection failed',
+      error: err.message
+    });
+  }
+});
+
+// ==========================================
+// 2. MULTI-FILE & EXIF MEDIA EXTRACTION
+// ==========================================
+app.post('/api/upload', upload.any(), async (req, res) => {
+  try {
+    const files = req.files || (req.file ? [req.file] : []);
+    if (!files || files.length === 0) {
+      return res.status(400).json({ error: 'No files uploaded.' });
+    }
+
+    const processedFiles = [];
+    for (const file of files) {
+      const filePath = file.path;
+      const fileExt = path.extname(file.originalname).toLowerCase();
+      let exifData = null;
+      let gps = null;
+      let timestamp = null;
+      let camera = null;
+
+      if (['.jpg', '.jpeg', '.tiff', '.png', '.heic'].includes(fileExt)) {
+        try {
+          const parsed = await exifr.parse(filePath, { gps: true, tiff: true });
+
+          if (parsed) {
+            exifData = parsed;
+            if (parsed.latitude && parsed.longitude) {
+              gps = {
+                latitude: parsed.latitude,
+                longitude: parsed.longitude,
+                altitude: parsed.GPSAltitude || null,
+                source: 'exif'
+              };
+            }
+            timestamp = parsed.DateTimeOriginal || parsed.CreateDate || parsed.ModifyDate || null;
+            if (parsed.Make || parsed.Model) {
+              camera = `${parsed.Make || ''} ${parsed.Model || ''}`.trim();
+            }
+          }
+        } catch (exifErr) {
+          console.warn('EXIF parse warning:', exifErr.message);
+        }
+      }
+
+      processedFiles.push({
+        mediaId: `med_${crypto.randomBytes(8).toString('hex')}`,
+        fileName: file.filename,
+        originalName: file.originalname,
+        filePath: `/uploads/${file.filename}`,
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        mediaType: file.mimetype.startsWith('video/') ? 'video' : file.mimetype.startsWith('audio/') ? 'audio' : 'image',
+        gps,
+        timestamp,
+        camera,
+        exif: exifData
+      });
+    }
+
+    res.json({
+      success: true,
+      count: processedFiles.length,
+      files: processedFiles
+    });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ error: 'Failed to process upload.' });
+  }
+});
+
+app.post('/api/media/upload', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded.' });
+    }
+
+    const filePath = req.file.path;
+    const fileExt = path.extname(req.file.originalname).toLowerCase();
+    let exifData = null;
+    let location = null;
+    let timestamp = null;
+    let camera = null;
+
+    if (['.jpg', '.jpeg', '.tiff', '.png', '.heic'].includes(fileExt)) {
+      try {
+        const parsed = await exifr.parse(filePath, { gps: true, tiff: true });
+
+        if (parsed) {
+          exifData = parsed;
+          if (parsed.latitude && parsed.longitude) {
+            location = {
+              latitude: parsed.latitude,
+              longitude: parsed.longitude,
+              altitude: parsed.GPSAltitude || null,
+              source: 'exif'
+            };
+          }
+          timestamp = parsed.DateTimeOriginal || parsed.CreateDate || parsed.ModifyDate || null;
+          if (parsed.Make || parsed.Model) {
+            camera = `${parsed.Make || ''} ${parsed.Model || ''}`.trim();
+          }
+        }
+      } catch (exifErr) {
+        console.warn('EXIF parse warning:', exifErr.message);
+      }
+    }
+
+    const mediaId = `med_${crypto.randomBytes(8).toString('hex')}`;
+
+    res.json({
+      success: true,
+      media: {
+        id: mediaId,
+        fileName: req.file.filename,
+        originalName: req.file.originalname,
+        filePath: `/uploads/${req.file.filename}`,
+        mimeType: req.file.mimetype,
+        fileSize: req.file.size,
+        mediaType: req.file.mimetype.startsWith('video/') ? 'video' : req.file.mimetype.startsWith('audio/') ? 'audio' : 'image',
+        location,
+        timestamp,
+        camera,
+        exif: exifData
+      }
+    });
+  } catch (error) {
+    console.error('Upload handling error:', error);
+    res.status(500).json({ error: 'Failed to process uploaded file.' });
+  }
+});
+
+// ==========================================
+// 3. CREATE CIVIC REPORT
+// ==========================================
+app.post('/api/reports', upload.any(), async (req, res) => {
+  try {
+    let {
+      userId,
+      category,
+      description,
+      duration,
+      recurrence,
+      severity,
+      isRiskPresent,
+      is_risk_present,
+      riskDescription,
+      risk_description,
+      location,
+      latitude,
+      longitude,
+      locationSource,
+      location_source,
+      accuracy,
+      address,
+      city,
+      state,
+      postalCode,
+      postal_code,
+      media = [],
+      extraContext = {},
+      smartSuggested = false,
+      smart_suggested = false
+    } = req.body;
+
+    const safeCategory = category || 'Other';
+    const parsedRisk = (isRiskPresent !== undefined ? isRiskPresent : is_risk_present);
+    const safeIsRiskPresent = Boolean(parsedRisk === true || parsedRisk === 'true' || parsedRisk === 1 || parsedRisk === '1');
+    const safeRiskDesc = riskDescription || risk_description || null;
+    const safeSmartSuggested = Boolean(smartSuggested === true || smartSuggested === 'true' || smart_suggested === true || smart_suggested === 'true');
+
+    // Parse nested objects if sent as strings in FormData
+    let parsedLocation = typeof location === 'string' ? parseJsonSafe(location, {}) : (location || {});
+    let parsedMedia = typeof media === 'string' ? parseJsonSafe(media, []) : (Array.isArray(media) ? media : []);
+    let parsedExtraContext = typeof extraContext === 'string' ? parseJsonSafe(extraContext, {}) : (extraContext || {});
+
+    // Resolve location parameters
+    const safeLat = parseFloat(parsedLocation.latitude !== undefined ? parsedLocation.latitude : latitude);
+    const safeLng = parseFloat(parsedLocation.longitude !== undefined ? parsedLocation.longitude : longitude);
+    const safeLocSource = parsedLocation.source || locationSource || location_source || 'manual';
+    const safeAccuracy = parseFloat(parsedLocation.accuracy !== undefined ? parsedLocation.accuracy : accuracy) || null;
+    const safeAddress = parsedLocation.address || address || null;
+    const safeCity = parsedLocation.city || city || null;
+    const safeState = parsedLocation.state || state || null;
+    const safePostalCode = parsedLocation.postalCode || postalCode || postal_code || null;
+
+    if (isNaN(safeLat) || isNaN(safeLng)) {
+      return res.status(400).json({ error: 'Valid latitude and longitude are required.' });
+    }
+
+    // Attach any multipart uploaded files to media list
+    if (req.files && Array.isArray(req.files) && req.files.length > 0) {
+      req.files.forEach(file => {
+        parsedMedia.push({
+          mediaId: `med_${crypto.randomBytes(8).toString('hex')}`,
+          fileName: file.filename,
+          originalName: file.originalname,
+          filePath: `/uploads/${file.filename}`,
+          mimeType: file.mimetype,
+          fileSize: file.size,
+          mediaType: file.mimetype.startsWith('video/') ? 'video' : file.mimetype.startsWith('audio/') ? 'audio' : 'image'
+        });
+      });
+    }
+
+    const reportId = `rep_${crypto.randomBytes(8).toString('hex')}`;
+    const reportCode = `ALC-2026-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    const priorityScore = calculateCivicPriorityScore({
+      severity,
+      isRiskPresent: safeIsRiskPresent,
+      recurrence,
+      category: safeCategory
+    });
+
+    await db.transaction(async (client) => {
+      // 1. Ensure user exists
+      if (userId) {
+        await client.query(`
+          INSERT INTO users (id, name, created_at)
+          VALUES ($1, 'Citizen', CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO NOTHING
+        `, [userId]);
+      }
+
+      // 2. Insert Report
+      await client.query(`
+        INSERT INTO reports (
+          id, report_code, user_id, category, description, duration, recurrence, severity,
+          is_risk_present, risk_description, status, civic_priority_score, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'Submitted', $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
+        reportId,
+        reportCode,
+        userId || null,
+        safeCategory,
+        description || '',
+        duration || null,
+        recurrence || null,
+        severity || null,
+        safeIsRiskPresent,
+        safeRiskDesc,
+        priorityScore
+      ]);
+
+      // 3. Insert Report Location (with PostGIS geometry)
+      await client.query(`
+        INSERT INTO report_location (
+          id, report_id, latitude, longitude, location_source, accuracy, address, city, state, postal_code, location_geom, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, ST_SetSRID(ST_MakePoint($4, $3), 4326), CURRENT_TIMESTAMP)
+      `, [
+        `loc_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        safeLat,
+        safeLng,
+        safeLocSource,
+        safeAccuracy,
+        safeAddress,
+        safeCity,
+        safeState,
+        safePostalCode
+      ]);
+
+      // 4. Issue Details
+      await client.query(`
+        INSERT INTO issue_details (
+          id, report_id, category, duration, recurrence, severity, smart_suggested, extra_context_json, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP)
+      `, [
+        `iss_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        safeCategory,
+        duration || null,
+        recurrence || null,
+        severity || null,
+        safeSmartSuggested,
+        JSON.stringify(parsedExtraContext)
+      ]);
+
+      // 5. Media & Metadata
+      for (const item of parsedMedia) {
+        const mediaId = item.mediaId || item.id || `med_${crypto.randomBytes(8).toString('hex')}`;
+        await client.query(`
+          INSERT INTO report_media (
+            id, report_id, media_type, original_name, file_name, file_path, mime_type, file_size, duration_seconds, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
+        `, [
+          mediaId,
+          reportId,
+          item.mediaType || 'image',
+          item.originalName || 'uploaded_media',
+          item.fileName || path.basename(item.filePath || ''),
+          item.filePath || '',
+          item.mimeType || null,
+          item.fileSize || null,
+          item.durationSeconds || null
+        ]);
+
+        if (item.exif || item.deviceInfo) {
+          await client.query(`
+            INSERT INTO report_metadata (
+              id, report_id, media_id, exif_json, device_info, created_at
+            ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+          `, [
+            `met_${crypto.randomBytes(6).toString('hex')}`,
+            reportId,
+            mediaId,
+            item.exif ? JSON.stringify(item.exif) : null,
+            item.deviceInfo ? JSON.stringify(item.deviceInfo) : null
+          ]);
+        }
+      }
+
+      // 6. Seed Initial Timeline Event
+      await client.query(`
+        INSERT INTO report_timeline (
+          id, report_id, stage, actor_type, actor_name, title, description, created_at
+        ) VALUES ($1, $2, 'Submitted', 'citizen', 'Citizen Reporter', 'Report Submitted', $3, CURRENT_TIMESTAMP)
+      `, [
+        `tml_${crypto.randomBytes(6).toString('hex')}`,
+        reportId,
+        `Report registered with priority score ${priorityScore}/100 and queued for municipal triage.`
+      ]);
+    });
+
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1`, [reportId]);
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [reportId]);
+    const mediaRes = await db.query(`SELECT * FROM report_media WHERE report_id = $1`, [reportId]);
+    const detailsRes = await db.query(`SELECT * FROM issue_details WHERE report_id = $1`, [reportId]);
+    const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [reportId]);
+
+    res.status(201).json({
+      success: true,
+      report: {
+        ...reportRes.rows[0],
+        location: locRes.rows[0] || null,
+        media: mediaRes.rows,
+        issueDetails: detailsRes.rows[0] || null,
+        timeline: timelineRes.rows
+      }
+    });
+  } catch (error) {
+    console.error('Report submission error:', error);
+    res.status(500).json({ error: error.message || 'Failed to persist report to database.' });
+  }
+});
+
+// ==========================================
+// 4. LIST ALL REPORTS
+// ==========================================
+app.get('/api/reports', async (req, res) => {
+  try {
+    const reportsRes = await db.query(`
+      SELECT r.*, 
+             l.latitude, l.longitude, l.location_source, l.accuracy, l.address, l.city
+      FROM reports r
+      LEFT JOIN report_location l ON r.id = l.report_id
+      ORDER BY r.created_at DESC
+    `);
+    const reports = reportsRes.rows;
+
+    const mediaListRes = await db.query(`SELECT * FROM report_media`);
+    const metadataListRes = await db.query(`SELECT * FROM report_metadata`);
+    const assignmentsListRes = await db.query(`SELECT * FROM report_assignments`);
+    const resolutionsListRes = await db.query(`SELECT * FROM report_resolutions`);
+    const challengesListRes = await db.query(`SELECT * FROM hei_challenges`);
+    const projectsListRes = await db.query(`SELECT * FROM hei_projects`);
+
+    const mediaList = mediaListRes.rows;
+    const metadataList = metadataListRes.rows;
+    const assignmentsList = assignmentsListRes.rows;
+    const resolutionsList = resolutionsListRes.rows;
+    const challengesList = challengesListRes.rows;
+    const projectsList = projectsListRes.rows;
+
+    const enriched = reports.map(r => ({
+      ...r,
+      media: mediaList.filter(m => m.report_id === r.id),
+      assignment: assignmentsList.find(a => a.report_id === r.id) || null,
+      resolution: resolutionsList.find(res => res.report_id === r.id) || null,
+      hei_challenge: challengesList.find(c => c.report_id === r.id) || null,
+      hei_project: projectsList.find(p => p.report_id === r.id) || null,
+      is_escalated_to_hei: !!challengesList.find(c => c.report_id === r.id),
+      metadata: metadataList.filter(m => m.report_id === r.id).map(m => ({
+        ...m,
+        exif: parseJsonSafe(m.exif_json)
+      }))
+    }));
+
+    res.json({
+      success: true,
+      count: enriched.length,
+      reports: enriched
+    });
+  } catch (err) {
+    console.error('Fetch reports error:', err);
+    res.status(500).json({ error: 'Failed to retrieve reports from PostgreSQL.' });
+  }
+});
+
+// ==========================================
+// 5. GET INDIVIDUAL REPORT & FULL LIFECYCLE
+// ==========================================
+app.get('/api/reports/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.headers['x-user-id'] || req.query.userId || null;
 
-    const report = db.prepare(`
-      SELECT * FROM reports WHERE id = ? OR report_code = ?
-    `).get(id, id);
+    const reportRes = await db.query(`
+      SELECT * FROM reports WHERE id = $1 OR report_code = $1
+    `, [id]);
 
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
 
-    const location = db.prepare(`SELECT * FROM report_location WHERE report_id = ?`).get(report.id);
-    const media = db.prepare(`SELECT * FROM report_media WHERE report_id = ?`).all(report.id);
-    const issueDetails = db.prepare(`SELECT * FROM issue_details WHERE report_id = ?`).get(report.id);
-    const metadata = db.prepare(`SELECT * FROM report_metadata WHERE report_id = ?`).all(report.id);
-    const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(report.id);
-    const assignment = db.prepare(`SELECT * FROM report_assignments WHERE report_id = ?`).get(report.id);
-    const resolution = db.prepare(`SELECT * FROM report_resolutions WHERE report_id = ?`).get(report.id);
-    const verifications = db.prepare(`SELECT * FROM report_verifications WHERE report_id = ? ORDER BY created_at DESC`).all(report.id);
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [report.id]);
+    const mediaRes = await db.query(`SELECT * FROM report_media WHERE report_id = $1`, [report.id]);
+    const detailsRes = await db.query(`SELECT * FROM issue_details WHERE report_id = $1`, [report.id]);
+    const metadataRes = await db.query(`SELECT * FROM report_metadata WHERE report_id = $1`, [report.id]);
+    const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [report.id]);
+    const assignRes = await db.query(`SELECT * FROM report_assignments WHERE report_id = $1`, [report.id]);
+    const resRes = await db.query(`SELECT * FROM report_resolutions WHERE report_id = $1`, [report.id]);
+    const verifRes = await db.query(`SELECT * FROM report_verifications WHERE report_id = $1 ORDER BY created_at DESC`, [report.id]);
 
-    // Civic Upvotes & Followers
-    const upvoteCount = db.prepare(`SELECT COUNT(*) as count FROM report_upvotes WHERE report_id = ?`).get(report.id)?.count || 0;
-    const followerCount = db.prepare(`SELECT COUNT(*) as count FROM report_followers WHERE report_id = ?`).get(report.id)?.count || 0;
+    const upvoteRes = await db.query(`SELECT COUNT(*) as count FROM report_upvotes WHERE report_id = $1`, [report.id]);
+    const followRes = await db.query(`SELECT COUNT(*) as count FROM report_followers WHERE report_id = $1`, [report.id]);
+
+    const upvoteCount = parseInt(upvoteRes.rows[0]?.count || '0', 10);
+    const followerCount = parseInt(followRes.rows[0]?.count || '0', 10);
+
+    // Fetch associated HEI Challenge & Project data if escalated
+    const challengeRes = await db.query(`SELECT * FROM hei_challenges WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const projectRes = await db.query(`SELECT * FROM hei_projects WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    let milestones = [];
+    if (projectRes.rows.length > 0) {
+      const msRes = await db.query(`SELECT * FROM hei_project_milestones WHERE project_id = $1 ORDER BY stage_index ASC`, [projectRes.rows[0].id]);
+      milestones = msRes.rows;
+    }
 
     let isUpvoted = false;
     let isFollowed = false;
     if (userId) {
-      isUpvoted = !!db.prepare(`SELECT 1 FROM report_upvotes WHERE report_id = ? AND user_id = ?`).get(report.id, userId);
-      isFollowed = !!db.prepare(`SELECT 1 FROM report_followers WHERE report_id = ? AND user_id = ?`).get(report.id, userId);
+      const upCheck = await db.query(`SELECT 1 FROM report_upvotes WHERE report_id = $1 AND user_id = $2`, [report.id, userId]);
+      const folCheck = await db.query(`SELECT 1 FROM report_followers WHERE report_id = $1 AND user_id = $2`, [report.id, userId]);
+      isUpvoted = upCheck.rows.length > 0;
+      isFollowed = folCheck.rows.length > 0;
     }
 
     res.json({
       success: true,
       report: {
         ...report,
-        location,
-        media,
-        issueDetails,
-        timeline,
-        assignment: assignment || null,
-        resolution: resolution || null,
+        location: locRes.rows[0] || null,
+        media: mediaRes.rows,
+        issueDetails: detailsRes.rows[0] || null,
+        timeline: timelineRes.rows,
+        assignment: assignRes.rows[0] || null,
+        resolution: resRes.rows[0] || null,
         upvote_count: upvoteCount,
         follower_count: followerCount,
         is_upvoted: isUpvoted,
         is_followed: isFollowed,
-        verifications: verifications.map(v => ({
+        is_escalated_to_hei: challengeRes.rows.length > 0,
+        hei_challenge: challengeRes.rows[0] || null,
+        hei_project: projectRes.rows.length > 0 ? {
+          ...projectRes.rows[0],
+          student_team: parseJsonSafe(projectRes.rows[0].student_team_json, []),
+          sdg_goals: parseJsonSafe(projectRes.rows[0].sdg_goals_json, []),
+          milestones
+        } : null,
+        verifications: verifRes.rows.map(v => ({
           ...v,
-          followUpMedia: v.follow_up_media_json ? JSON.parse(v.follow_up_media_json) : []
+          followUpMedia: parseJsonSafe(v.follow_up_media_json, [])
         })),
-        metadata: metadata.map(m => ({
+        metadata: metadataRes.rows.map(m => ({
           ...m,
-          exif: m.exif_json ? JSON.parse(m.exif_json) : null
+          exif: parseJsonSafe(m.exif_json)
         }))
       }
     });
@@ -662,8 +681,10 @@ app.get('/api/reports/:id', (req, res) => {
   }
 });
 
-// 6. Phase 2: Transition Stage Endpoint
-app.post('/api/reports/:id/stage', (req, res) => {
+// ==========================================
+// 6. TRANSITION STAGE ENDPOINT
+// ==========================================
+app.post('/api/reports/:id/stage', async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -680,21 +701,22 @@ app.post('/api/reports/:id/stage', (req, res) => {
       resolutionPhotoName
     } = req.body;
 
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ? OR report_code = ?`).get(id, id);
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
 
-    const tx = db.transaction(() => {
+    await db.transaction(async (client) => {
       // 1. Update Report Status
-      db.prepare(`UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(stage, report.id);
+      await client.query(`UPDATE reports SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [stage, report.id]);
 
       // 2. Add Timeline event
       const eventTitle = title || `Status updated to ${stage}`;
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         report.id,
         stage,
@@ -702,54 +724,52 @@ app.post('/api/reports/:id/stage', (req, res) => {
         actorName,
         eventTitle,
         description
-      );
+      ]);
 
       // 3. Handle Assignment if provided
       if (departmentName && officerName) {
-        db.prepare(`
+        await client.query(`
           INSERT INTO report_assignments (id, report_id, department_name, officer_name, scheduled_date, notes, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
           ON CONFLICT(report_id) DO UPDATE SET
-            department_name = excluded.department_name,
-            officer_name = excluded.officer_name,
-            scheduled_date = excluded.scheduled_date,
-            notes = excluded.notes,
+            department_name = EXCLUDED.department_name,
+            officer_name = EXCLUDED.officer_name,
+            scheduled_date = EXCLUDED.scheduled_date,
+            notes = EXCLUDED.notes,
             updated_at = CURRENT_TIMESTAMP
-        `).run(
+        `, [
           `asg_${crypto.randomBytes(6).toString('hex')}`,
           report.id,
           departmentName,
           officerName,
           scheduledDate || null,
           description || null
-        );
+        ]);
       }
 
       // 4. Handle Resolution if marked Resolved
       if (stage === 'Resolved' && resolutionNotes) {
-        db.prepare(`
-          INSERT INTO report_resolutions (id, report_id, resolution_notes, resolved_by, resolution_photo_url, resolution_photo_name)
-          VALUES (?, ?, ?, ?, ?, ?)
+        await client.query(`
+          INSERT INTO report_resolutions (id, report_id, resolution_notes, resolved_by, resolution_photo_url, resolution_photo_name, resolution_timestamp, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           ON CONFLICT(report_id) DO UPDATE SET
-            resolution_notes = excluded.resolution_notes,
-            resolved_by = excluded.resolved_by,
-            resolution_photo_url = excluded.resolution_photo_url,
-            resolution_photo_name = excluded.resolution_photo_name,
+            resolution_notes = EXCLUDED.resolution_notes,
+            resolved_by = EXCLUDED.resolved_by,
+            resolution_photo_url = EXCLUDED.resolution_photo_url,
+            resolution_photo_name = EXCLUDED.resolution_photo_name,
             resolution_timestamp = CURRENT_TIMESTAMP
-        `).run(
+        `, [
           `res_${crypto.randomBytes(6).toString('hex')}`,
           report.id,
           resolutionNotes,
           officerName || actorName,
           resolutionPhotoUrl || null,
           resolutionPhotoName || null
-        );
+        ]);
       }
     });
 
-    tx();
-
-    // Push notification to all citizens following this report
+    // Notify followers
     notifyReportFollowers(
       report.id,
       'stage_change',
@@ -757,19 +777,18 @@ app.post('/api/reports/:id/stage', (req, res) => {
       description || `Authority updated stage to ${stage}. Remediation is progressing.`
     );
 
-    // Return updated report
-    const updated = db.prepare(`SELECT * FROM reports WHERE id = ?`).get(report.id);
-    const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(report.id);
-    const assignment = db.prepare(`SELECT * FROM report_assignments WHERE report_id = ?`).get(report.id);
-    const resolution = db.prepare(`SELECT * FROM report_resolutions WHERE report_id = ?`).get(report.id);
+    const updatedRes = await db.query(`SELECT * FROM reports WHERE id = $1`, [report.id]);
+    const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [report.id]);
+    const assignRes = await db.query(`SELECT * FROM report_assignments WHERE report_id = $1`, [report.id]);
+    const resRes = await db.query(`SELECT * FROM report_resolutions WHERE report_id = $1`, [report.id]);
 
     res.json({
       success: true,
       report: {
-        ...updated,
-        timeline,
-        assignment: assignment || null,
-        resolution: resolution || null
+        ...updatedRes.rows[0],
+        timeline: timelineRes.rows,
+        assignment: assignRes.rows[0] || null,
+        resolution: resRes.rows[0] || null
       }
     });
   } catch (err) {
@@ -778,12 +797,14 @@ app.post('/api/reports/:id/stage', (req, res) => {
   }
 });
 
-// 7. Phase 2: Citizen Verification Feedback Loop Endpoint
-app.post('/api/reports/:id/verify', (req, res) => {
+// ==========================================
+// 7. CITIZEN VERIFICATION FEEDBACK LOOP
+// ==========================================
+app.post('/api/reports/:id/verify', async (req, res) => {
   try {
     const { id } = req.params;
     const {
-      verdict, // 'fixed', 'partially_fixed', 'not_fixed'
+      verdict,
       citizenNotes = '',
       satisfactionRating = 5,
       followUpMedia = []
@@ -793,7 +814,8 @@ app.post('/api/reports/:id/verify', (req, res) => {
       return res.status(400).json({ error: 'Verification verdict is required.' });
     }
 
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ? OR report_code = ?`).get(id, id);
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
@@ -812,50 +834,45 @@ app.post('/api/reports/:id/verify', (req, res) => {
       timelineDesc = citizenNotes || 'Citizen reported the issue was only partially resolved. Additional inspection needed.';
     }
 
-    const tx = db.transaction(() => {
-      // 1. Update Report Status
-      db.prepare(`UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(newStatus, report.id);
+    await db.transaction(async (client) => {
+      await client.query(`UPDATE reports SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [newStatus, report.id]);
 
-      // 2. Insert Verification Log
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_verifications (
-          id, report_id, verdict, citizen_notes, satisfaction_rating, follow_up_media_json, verified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `).run(
+          id, report_id, verdict, citizen_notes, satisfaction_rating, follow_up_media_json, verified_at, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
         `ver_${crypto.randomBytes(6).toString('hex')}`,
         report.id,
         verdict,
         citizenNotes,
         satisfactionRating,
         JSON.stringify(followUpMedia)
-      );
+      ]);
 
-      // 3. Insert Timeline Record
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (
           id, report_id, stage, actor_type, actor_name, title, description, created_at
-        ) VALUES (?, ?, ?, 'citizen', 'Citizen Reporter', ?, ?, CURRENT_TIMESTAMP)
-      `).run(
+        ) VALUES ($1, $2, $3, 'citizen', 'Citizen Reporter', $4, $5, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         report.id,
         newStatus,
         timelineTitle,
         timelineDesc
-      );
+      ]);
     });
 
-    tx();
-
-    const updated = db.prepare(`SELECT * FROM reports WHERE id = ?`).get(report.id);
-    const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(report.id);
-    const verifications = db.prepare(`SELECT * FROM report_verifications WHERE report_id = ? ORDER BY created_at DESC`).all(report.id);
+    const updatedRes = await db.query(`SELECT * FROM reports WHERE id = $1`, [report.id]);
+    const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [report.id]);
+    const verifRes = await db.query(`SELECT * FROM report_verifications WHERE report_id = $1 ORDER BY created_at DESC`, [report.id]);
 
     res.json({
       success: true,
       report: {
-        ...updated,
-        timeline,
-        verifications
+        ...updatedRes.rows[0],
+        timeline: timelineRes.rows,
+        verifications: verifRes.rows
       }
     });
   } catch (err) {
@@ -864,14 +881,16 @@ app.post('/api/reports/:id/verify', (req, res) => {
   }
 });
 
-// 8. Phase 2: Authority Simulation Helper Endpoint
-// Advances a report automatically to the next stage or directly to 'Resolved' for testing
-app.post('/api/reports/:id/simulate-advance', (req, res) => {
+// ==========================================
+// 8. SIMULATE ADVANCE ENDPOINT
+// ==========================================
+app.post('/api/reports/:id/simulate-advance', async (req, res) => {
   try {
     const { id } = req.params;
     const { targetStage } = req.body;
 
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ? OR report_code = ?`).get(id, id);
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
@@ -892,7 +911,6 @@ app.post('/api/reports/:id/simulate-advance', (req, res) => {
 
     let nextStage = targetStage || (currentIdx < stagesOrder.length - 1 ? stagesOrder[currentIdx + 1] : 'Resolved');
 
-    // Simulate stage details
     let stageTitle = '';
     let stageDesc = '';
     let resolutionNotes = null;
@@ -914,70 +932,62 @@ app.post('/api/reports/:id/simulate-advance', (req, res) => {
       stageTitle = 'Remediation Completed by Authority';
       stageDesc = `Work completed. Waterway unblocked and reinforced with concrete grading. Photographic proof submitted.`;
       resolutionNotes = `Field crew resolved blockage and cleaned 45 meters of drainage channel. Normal flow restored.`;
-      // Use sample resolved photo
       resolutionPhotoUrl = '/samples/flooded_road_mumbai.jpg';
     }
 
-    const tx = db.transaction(() => {
-      // 1. Update status
-      db.prepare(`UPDATE reports SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(nextStage, report.id);
+    await db.transaction(async (client) => {
+      await client.query(`UPDATE reports SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [nextStage, report.id]);
 
-      // 2. Timeline
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, ?, 'authority', ?, ?, ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, $3, 'authority', $4, $5, $6, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         report.id,
         nextStage,
         deptInfo.officer,
         stageTitle,
         stageDesc
-      );
+      ]);
 
-      // 3. Assignment
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_assignments (id, report_id, department_name, officer_name, scheduled_date, notes, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
         ON CONFLICT(report_id) DO UPDATE SET
-          department_name = excluded.department_name,
-          officer_name = excluded.officer_name,
-          notes = excluded.notes,
+          department_name = EXCLUDED.department_name,
+          officer_name = EXCLUDED.officer_name,
+          notes = EXCLUDED.notes,
           updated_at = CURRENT_TIMESTAMP
-      `).run(
+      `, [
         `asg_${crypto.randomBytes(6).toString('hex')}`,
         report.id,
         deptInfo.dept,
         deptInfo.officer,
         new Date(Date.now() + deptInfo.slaHours * 3600000).toLocaleString(),
         stageDesc
-      );
+      ]);
 
-      // 4. Resolution if Resolved
       if (nextStage === 'Resolved') {
-        db.prepare(`
-          INSERT INTO report_resolutions (id, report_id, resolution_notes, resolved_by, resolution_photo_url, resolution_photo_name)
-          VALUES (?, ?, ?, ?, ?, ?)
+        await client.query(`
+          INSERT INTO report_resolutions (id, report_id, resolution_notes, resolved_by, resolution_photo_url, resolution_photo_name, resolution_timestamp, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
           ON CONFLICT(report_id) DO UPDATE SET
-            resolution_notes = excluded.resolution_notes,
-            resolved_by = excluded.resolved_by,
-            resolution_photo_url = excluded.resolution_photo_url,
-            resolution_photo_name = excluded.resolution_photo_name,
+            resolution_notes = EXCLUDED.resolution_notes,
+            resolved_by = EXCLUDED.resolved_by,
+            resolution_photo_url = EXCLUDED.resolution_photo_url,
+            resolution_photo_name = EXCLUDED.resolution_photo_name,
             resolution_timestamp = CURRENT_TIMESTAMP
-        `).run(
+        `, [
           `res_${crypto.randomBytes(6).toString('hex')}`,
           report.id,
           resolutionNotes,
           deptInfo.officer,
           resolutionPhotoUrl,
           'remediation_proof_site.jpg'
-        );
+        ]);
       }
     });
 
-    tx();
-
-    // Push notification to followers on simulate-advance
     notifyReportFollowers(
       report.id,
       'stage_change',
@@ -985,19 +995,18 @@ app.post('/api/reports/:id/simulate-advance', (req, res) => {
       stageDesc || `Authority updated stage to ${nextStage}. Remediation is progressing.`
     );
 
-    // Fetch refreshed complete entity
-    const updated = db.prepare(`SELECT * FROM reports WHERE id = ?`).get(report.id);
-    const timeline = db.prepare(`SELECT * FROM report_timeline WHERE report_id = ? ORDER BY created_at ASC`).all(report.id);
-    const assignment = db.prepare(`SELECT * FROM report_assignments WHERE report_id = ?`).get(report.id);
-    const resolution = db.prepare(`SELECT * FROM report_resolutions WHERE report_id = ?`).get(report.id);
+    const updatedRes = await db.query(`SELECT * FROM reports WHERE id = $1`, [report.id]);
+    const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [report.id]);
+    const assignRes = await db.query(`SELECT * FROM report_assignments WHERE report_id = $1`, [report.id]);
+    const resRes = await db.query(`SELECT * FROM report_resolutions WHERE report_id = $1`, [report.id]);
 
     res.json({
       success: true,
       report: {
-        ...updated,
-        timeline,
-        assignment: assignment || null,
-        resolution: resolution || null
+        ...updatedRes.rows[0],
+        timeline: timelineRes.rows,
+        assignment: assignRes.rows[0] || null,
+        resolution: resRes.rows[0] || null
       }
     });
   } catch (err) {
@@ -1007,16 +1016,14 @@ app.post('/api/reports/:id/simulate-advance', (req, res) => {
 });
 
 // ==========================================
-// PHASE 4: COMMUNITY ISSUES & UPVOTING ROUTES
+// 9. COMMUNITY ISSUES FEED ENDPOINT
 // ==========================================
-
-// 9. Community Issues Feed Endpoint
-app.get('/api/community/issues', (req, res) => {
+app.get('/api/community/issues', async (req, res) => {
   try {
     const {
       lat = 19.0760,
       lng = 72.8777,
-      sort = 'nearby', // 'nearby' | 'supported' | 'recent' | 'serious'
+      sort = 'nearby',
       category = 'all',
       search = '',
     } = req.query;
@@ -1025,7 +1032,6 @@ app.get('/api/community/issues', (req, res) => {
     const userLat = parseFloat(lat) || 19.0760;
     const userLng = parseFloat(lng) || 72.8777;
 
-    // Base query fetching reports with locations
     let query = `
       SELECT r.*,
              l.latitude, l.longitude, l.location_source, l.accuracy, l.address, l.city,
@@ -1039,38 +1045,34 @@ app.get('/api/community/issues', (req, res) => {
     `;
     const params = [];
 
-    // Filter by category
     if (category && category !== 'all' && category !== 'All') {
-      query += ` AND r.category = ?`;
       params.push(category);
+      query += ` AND r.category = $${params.length}`;
     }
 
-    // Filter by search query
     if (search && search.trim()) {
-      query += ` AND (r.report_code LIKE ? OR r.description LIKE ? OR l.address LIKE ? OR r.category LIKE ?)`;
-      const term = `%${search.trim()}%`;
-      params.push(term, term, term, term);
+      params.push(`%${search.trim()}%`);
+      const pIdx = params.length;
+      query += ` AND (r.report_code ILIKE $${pIdx} OR r.description ILIKE $${pIdx} OR l.address ILIKE $${pIdx} OR r.category ILIKE $${pIdx})`;
     }
 
-    const rows = db.prepare(query).all(...params);
+    const rowsRes = await db.query(query, params);
+    const rows = rowsRes.rows;
 
-    // Get list of upvoted and followed reports for current user in one quick query
     let userUpvotedSet = new Set();
     let userFollowedSet = new Set();
     if (userId) {
-      const userUpvotes = db.prepare(`SELECT report_id FROM report_upvotes WHERE user_id = ?`).all(userId);
-      userUpvotes.forEach(u => userUpvotedSet.add(u.report_id));
+      const userUpvotesRes = await db.query(`SELECT report_id FROM report_upvotes WHERE user_id = $1`, [userId]);
+      userUpvotesRes.rows.forEach(u => userUpvotedSet.add(u.report_id));
 
-      const userFollows = db.prepare(`SELECT report_id FROM report_followers WHERE user_id = ?`).all(userId);
-      userFollows.forEach(f => userFollowedSet.add(f.report_id));
+      const userFollowsRes = await db.query(`SELECT report_id FROM report_followers WHERE user_id = $1`, [userId]);
+      userFollowsRes.rows.forEach(f => userFollowedSet.add(f.report_id));
     }
 
-    // Enrich rows with distance, privacy-safe approximate location, and user interaction states
     const enriched = rows.map((r) => {
       const distance = calculateHaversineDistance(userLat, userLng, r.latitude, r.longitude);
       const approxLocation = getApproximateLocationText(r.address, r.city, distance);
 
-      // Severity weight for sorting
       let severityWeight = 2;
       if (r.severity === 'Dangerous') severityWeight = 4;
       else if (r.severity === 'Serious') severityWeight = 3;
@@ -1079,6 +1081,8 @@ app.get('/api/community/issues', (req, res) => {
 
       return {
         ...r,
+        upvote_count: parseInt(r.upvote_count || '0', 10),
+        follower_count: parseInt(r.follower_count || '0', 10),
         distance_km: distance,
         approx_location: approxLocation,
         is_upvoted: userUpvotedSet.has(r.id),
@@ -1087,7 +1091,6 @@ app.get('/api/community/issues', (req, res) => {
       };
     });
 
-    // Sort according to requested civic sorting mode
     if (sort === 'nearby') {
       enriched.sort((a, b) => {
         if (a.distance_km === null) return 1;
@@ -1099,7 +1102,6 @@ app.get('/api/community/issues', (req, res) => {
     } else if (sort === 'serious' || sort === 'Serious') {
       enriched.sort((a, b) => (b.severity_weight - a.severity_weight) || (b.civic_priority_score - a.civic_priority_score));
     } else {
-      // 'recent'
       enriched.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
 
@@ -1116,8 +1118,10 @@ app.get('/api/community/issues', (req, res) => {
   }
 });
 
-// 10. Upvote Toggle Endpoint (Enforces 1 upvote per user, auto-follows)
-app.post('/api/reports/:id/upvote', (req, res) => {
+// ==========================================
+// 10. UPVOTE TOGGLE ENDPOINT
+// ==========================================
+app.post('/api/reports/:id/upvote', async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.body.userId || req.headers['x-user-id'];
@@ -1126,7 +1130,8 @@ app.post('/api/reports/:id/upvote', (req, res) => {
       return res.status(400).json({ error: 'User identity is required to upvote.' });
     }
 
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ? OR report_code = ?`).get(id, id);
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
@@ -1134,56 +1139,46 @@ app.post('/api/reports/:id/upvote', (req, res) => {
     let isUpvotedNow = false;
     let isFollowedNow = false;
 
-    const upvoteTx = db.transaction(() => {
-      const existing = db.prepare(`
-        SELECT id FROM report_upvotes WHERE report_id = ? AND user_id = ?
-      `).get(report.id, userId);
+    await db.transaction(async (client) => {
+      const existingRes = await client.query(`
+        SELECT id FROM report_upvotes WHERE report_id = $1 AND user_id = $2
+      `, [report.id, userId]);
 
-      if (existing) {
-        // Toggle OFF: Remove upvote
-        db.prepare(`
-          DELETE FROM report_upvotes WHERE report_id = ? AND user_id = ?
-        `).run(report.id, userId);
+      if (existingRes.rows.length > 0) {
+        await client.query(`
+          DELETE FROM report_upvotes WHERE report_id = $1 AND user_id = $2
+        `, [report.id, userId]);
         isUpvotedNow = false;
       } else {
-        // Toggle ON: Insert upvote
-        db.prepare(`
+        await client.query(`
           INSERT INTO report_upvotes (id, report_id, user_id, created_at)
-          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(`upv_${crypto.randomBytes(6).toString('hex')}`, report.id, userId);
+          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        `, [`upv_${crypto.randomBytes(6).toString('hex')}`, report.id, userId]);
         isUpvotedNow = true;
 
-        // Auto-follow when citizen upvotes issue
-        db.prepare(`
-          INSERT OR IGNORE INTO report_followers (id, report_id, user_id, created_at)
-          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(`fol_${crypto.randomBytes(6).toString('hex')}`, report.id, userId);
+        await client.query(`
+          INSERT INTO report_followers (id, report_id, user_id, created_at)
+          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+          ON CONFLICT (report_id, user_id) DO NOTHING
+        `, [`fol_${crypto.randomBytes(6).toString('hex')}`, report.id, userId]);
       }
 
-      // Check final follower state
-      const followCheck = db.prepare(`
-        SELECT 1 FROM report_followers WHERE report_id = ? AND user_id = ?
-      `).get(report.id, userId);
-      isFollowedNow = !!followCheck;
+      const followCheckRes = await client.query(`
+        SELECT 1 FROM report_followers WHERE report_id = $1 AND user_id = $2
+      `, [report.id, userId]);
+      isFollowedNow = followCheckRes.rows.length > 0;
     });
 
-    upvoteTx();
-
-    const upvoteCount = db.prepare(`
-      SELECT COUNT(*) as count FROM report_upvotes WHERE report_id = ?
-    `).get(report.id)?.count || 0;
-
-    const followerCount = db.prepare(`
-      SELECT COUNT(*) as count FROM report_followers WHERE report_id = ?
-    `).get(report.id)?.count || 0;
+    const upvoteCountRes = await db.query(`SELECT COUNT(*) as count FROM report_upvotes WHERE report_id = $1`, [report.id]);
+    const followerCountRes = await db.query(`SELECT COUNT(*) as count FROM report_followers WHERE report_id = $1`, [report.id]);
 
     res.json({
       success: true,
       report_id: report.id,
       is_upvoted: isUpvotedNow,
-      upvote_count: upvoteCount,
+      upvote_count: parseInt(upvoteCountRes.rows[0]?.count || '0', 10),
       is_followed: isFollowedNow,
-      follower_count: followerCount,
+      follower_count: parseInt(followerCountRes.rows[0]?.count || '0', 10),
       message: isUpvotedNow
         ? 'Support recorded. You are now tracking updates for this civic issue.'
         : 'Support removed.',
@@ -1194,8 +1189,10 @@ app.post('/api/reports/:id/upvote', (req, res) => {
   }
 });
 
-// 11. Follow Toggle Endpoint (Follow / Unfollow for lifecycle updates)
-app.post('/api/reports/:id/follow', (req, res) => {
+// ==========================================
+// 11. FOLLOW TOGGLE ENDPOINT
+// ==========================================
+app.post('/api/reports/:id/follow', async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.body.userId || req.headers['x-user-id'];
@@ -1204,43 +1201,40 @@ app.post('/api/reports/:id/follow', (req, res) => {
       return res.status(400).json({ error: 'User identity is required to follow.' });
     }
 
-    const report = db.prepare(`SELECT * FROM reports WHERE id = ? OR report_code = ?`).get(id, id);
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
     if (!report) {
       return res.status(404).json({ error: 'Report not found.' });
     }
 
     let isFollowedNow = false;
 
-    const followTx = db.transaction(() => {
-      const existing = db.prepare(`
-        SELECT id FROM report_followers WHERE report_id = ? AND user_id = ?
-      `).get(report.id, userId);
+    await db.transaction(async (client) => {
+      const existingRes = await client.query(`
+        SELECT id FROM report_followers WHERE report_id = $1 AND user_id = $2
+      `, [report.id, userId]);
 
-      if (existing) {
-        db.prepare(`
-          DELETE FROM report_followers WHERE report_id = ? AND user_id = ?
-        `).run(report.id, userId);
+      if (existingRes.rows.length > 0) {
+        await client.query(`
+          DELETE FROM report_followers WHERE report_id = $1 AND user_id = $2
+        `, [report.id, userId]);
         isFollowedNow = false;
       } else {
-        db.prepare(`
+        await client.query(`
           INSERT INTO report_followers (id, report_id, user_id, created_at)
-          VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(`fol_${crypto.randomBytes(6).toString('hex')}`, report.id, userId);
+          VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+        `, [`fol_${crypto.randomBytes(6).toString('hex')}`, report.id, userId]);
         isFollowedNow = true;
       }
     });
 
-    followTx();
-
-    const followerCount = db.prepare(`
-      SELECT COUNT(*) as count FROM report_followers WHERE report_id = ?
-    `).get(report.id)?.count || 0;
+    const followerCountRes = await db.query(`SELECT COUNT(*) as count FROM report_followers WHERE report_id = $1`, [report.id]);
 
     res.json({
       success: true,
       report_id: report.id,
       is_followed: isFollowedNow,
-      follower_count: followerCount,
+      follower_count: parseInt(followerCountRes.rows[0]?.count || '0', 10),
       message: isFollowedNow
         ? 'You are now following this issue for status updates.'
         : 'Unfollowed issue.',
@@ -1251,8 +1245,10 @@ app.post('/api/reports/:id/follow', (req, res) => {
   }
 });
 
-// 12. User Activity & Subscribed Issues Endpoint (My Reports, Following, Upvoted, Notifications)
-app.get('/api/user/activity', (req, res) => {
+// ==========================================
+// 12. USER ACTIVITY & NOTIFICATIONS ENDPOINT
+// ==========================================
+app.get('/api/user/activity', async (req, res) => {
   try {
     const userId = req.headers['x-user-id'] || req.query.userId;
     const userLat = parseFloat(req.query.lat) || 19.0760;
@@ -1268,26 +1264,26 @@ app.get('/api/user/activity', (req, res) => {
         const approxLocation = getApproximateLocationText(r.address, r.city, distance);
         return {
           ...r,
+          upvote_count: parseInt(r.upvote_count || '0', 10),
+          follower_count: parseInt(r.follower_count || '0', 10),
           distance_km: distance,
           approx_location: approxLocation,
         };
       });
     };
 
-    // My Reports
-    const myReportsRaw = db.prepare(`
+    const myReportsRes = await db.query(`
       SELECT r.*, l.latitude, l.longitude, l.address, l.city,
              (SELECT file_path FROM report_media WHERE report_id = r.id AND media_type = 'image' LIMIT 1) as photo_url,
              (SELECT COUNT(*) FROM report_upvotes WHERE report_id = r.id) as upvote_count,
              (SELECT COUNT(*) FROM report_followers WHERE report_id = r.id) as follower_count
       FROM reports r
       LEFT JOIN report_location l ON r.id = l.report_id
-      WHERE r.user_id = ?
+      WHERE r.user_id = $1
       ORDER BY r.created_at DESC
-    `).all(userId);
+    `, [userId]);
 
-    // Followed Reports
-    const followedReportsRaw = db.prepare(`
+    const followedReportsRes = await db.query(`
       SELECT r.*, l.latitude, l.longitude, l.address, l.city,
              (SELECT file_path FROM report_media WHERE report_id = r.id AND media_type = 'image' LIMIT 1) as photo_url,
              (SELECT COUNT(*) FROM report_upvotes WHERE report_id = r.id) as upvote_count,
@@ -1295,12 +1291,11 @@ app.get('/api/user/activity', (req, res) => {
       FROM reports r
       LEFT JOIN report_location l ON r.id = l.report_id
       INNER JOIN report_followers f ON r.id = f.report_id
-      WHERE f.user_id = ?
+      WHERE f.user_id = $1
       ORDER BY f.created_at DESC
-    `).all(userId);
+    `, [userId]);
 
-    // Upvoted Reports
-    const upvotedReportsRaw = db.prepare(`
+    const upvotedReportsRes = await db.query(`
       SELECT r.*, l.latitude, l.longitude, l.address, l.city,
              (SELECT file_path FROM report_media WHERE report_id = r.id AND media_type = 'image' LIMIT 1) as photo_url,
              (SELECT COUNT(*) FROM report_upvotes WHERE report_id = r.id) as upvote_count,
@@ -1308,31 +1303,30 @@ app.get('/api/user/activity', (req, res) => {
       FROM reports r
       LEFT JOIN report_location l ON r.id = l.report_id
       INNER JOIN report_upvotes u ON r.id = u.report_id
-      WHERE u.user_id = ?
+      WHERE u.user_id = $1
       ORDER BY u.created_at DESC
-    `).all(userId);
+    `, [userId]);
 
-    // Notifications Feed
-    const notifications = db.prepare(`
+    const notificationsRes = await db.query(`
       SELECT n.*, r.report_code, r.category, r.status
       FROM user_notifications n
       LEFT JOIN reports r ON n.report_id = r.id
-      WHERE n.user_id = ?
+      WHERE n.user_id = $1
       ORDER BY n.created_at DESC
       LIMIT 50
-    `).all(userId);
+    `, [userId]);
 
-    const unreadCount = db.prepare(`
-      SELECT COUNT(*) as count FROM user_notifications WHERE user_id = ? AND is_read = 0
-    `).get(userId)?.count || 0;
+    const unreadRes = await db.query(`
+      SELECT COUNT(*) as count FROM user_notifications WHERE user_id = $1 AND is_read = FALSE
+    `, [userId]);
 
     res.json({
       success: true,
-      myReports: enrichReportsList(myReportsRaw),
-      followingReports: enrichReportsList(followedReportsRaw),
-      upvotedReports: enrichReportsList(upvotedReportsRaw),
-      notifications,
-      unreadCount,
+      myReports: enrichReportsList(myReportsRes.rows),
+      followingReports: enrichReportsList(followedReportsRes.rows),
+      upvotedReports: enrichReportsList(upvotedReportsRes.rows),
+      notifications: notificationsRes.rows,
+      unreadCount: parseInt(unreadRes.rows[0]?.count || '0', 10),
     });
   } catch (err) {
     console.error('User activity error:', err);
@@ -1340,11 +1334,11 @@ app.get('/api/user/activity', (req, res) => {
   }
 });
 
-// 13. Mark Notification as Read
-app.post('/api/user/notifications/:id/read', (req, res) => {
+// Mark Notification as Read
+app.post('/api/user/notifications/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
-    db.prepare(`UPDATE user_notifications SET is_read = 1 WHERE id = ?`).run(id);
+    await db.query(`UPDATE user_notifications SET is_read = TRUE WHERE id = $1`, [id]);
     res.json({ success: true });
   } catch (err) {
     console.error('Notification read error:', err);
@@ -1352,12 +1346,12 @@ app.post('/api/user/notifications/:id/read', (req, res) => {
   }
 });
 
-// 14. Mark All Notifications as Read
-app.post('/api/user/notifications/read-all', (req, res) => {
+// Mark All Notifications as Read
+app.post('/api/user/notifications/read-all', async (req, res) => {
   try {
     const userId = req.body.userId || req.headers['x-user-id'];
     if (userId) {
-      db.prepare(`UPDATE user_notifications SET is_read = 1 WHERE user_id = ?`).run(userId);
+      await db.query(`UPDATE user_notifications SET is_read = TRUE WHERE user_id = $1`, [userId]);
     }
     res.json({ success: true });
   } catch (err) {
@@ -1367,12 +1361,9 @@ app.post('/api/user/notifications/read-all', (req, res) => {
 });
 
 // ==========================================
-// PHASE 3: COMMUNITY MAP & HOTSPOTS ROUTES
+// PHASE 3: COMMUNITY MAP & HOTSPOTS ROUTES (POSTGIS COMPATIBLE)
 // ==========================================
-import { clusterReportsByProximity, detectCivicHotspots, detectSystemicPatterns } from './hotspots.js';
-
-// Helper function to fetch enriched map reports with query filters
-function getEnrichedMapReports(filters = {}) {
+async function getEnrichedMapReports(filters = {}) {
   const { category, status, timeframe, minLat, maxLat, minLng, maxLng } = filters;
 
   let query = `
@@ -1387,50 +1378,54 @@ function getEnrichedMapReports(filters = {}) {
 
   // Category filter
   if (category && category !== 'all' && category !== 'All') {
-    query += ` AND r.category = ?`;
     params.push(category);
+    query += ` AND r.category = $${params.length}`;
   }
 
-  // Status filter (active, resolved, emerging, or specific status)
+  // Status filter
   if (status && status !== 'all' && status !== 'All') {
     if (status === 'active' || status === 'Active') {
       query += ` AND r.status NOT IN ('Confirmed Resolved', 'Resolved')`;
     } else if (status === 'resolved' || status === 'Resolved') {
       query += ` AND r.status IN ('Confirmed Resolved', 'Resolved')`;
     } else if (status === 'emerging' || status === 'Emerging') {
-      query += ` AND r.created_at >= datetime('now', '-2 days') AND r.severity IN ('Dangerous', 'Serious')`;
+      query += ` AND r.created_at >= (NOW() - INTERVAL '2 days') AND r.severity IN ('Dangerous', 'Serious')`;
     } else {
-      query += ` AND r.status = ?`;
       params.push(status);
+      query += ` AND r.status = $${params.length}`;
     }
   }
 
-  // Timeframe filter (today, 7d, 30d, all)
+  // Timeframe filter
   if (timeframe && timeframe !== 'all' && timeframe !== 'All') {
     if (timeframe === 'today' || timeframe === 'Today') {
-      query += ` AND r.created_at >= datetime('now', '-1 days')`;
+      query += ` AND r.created_at >= (NOW() - INTERVAL '1 day')`;
     } else if (timeframe === '7d' || timeframe === '7 Days') {
-      query += ` AND r.created_at >= datetime('now', '-7 days')`;
+      query += ` AND r.created_at >= (NOW() - INTERVAL '7 days')`;
     } else if (timeframe === '30d' || timeframe === '30 Days') {
-      query += ` AND r.created_at >= datetime('now', '-30 days')`;
+      query += ` AND r.created_at >= (NOW() - INTERVAL '30 days')`;
     }
   }
 
-  // Bounding box filter if provided
+  // Bounding box filter (compatible with PostGIS coordinates)
   if (minLat && maxLat && minLng && maxLng) {
-    query += ` AND l.latitude BETWEEN ? AND ? AND l.longitude BETWEEN ? AND ?`;
     params.push(Number(minLat), Number(maxLat), Number(minLng), Number(maxLng));
+    const p1 = params.length - 3;
+    const p2 = params.length - 2;
+    const p3 = params.length - 1;
+    const p4 = params.length;
+    query += ` AND l.latitude BETWEEN $${p1} AND $${p2} AND l.longitude BETWEEN $${p3} AND $${p4}`;
   }
 
   query += ` ORDER BY r.created_at DESC`;
 
-  return db.prepare(query).all(...params);
+  const res = await db.query(query, params);
+  return res.rows;
 }
 
-// 9. Phase 3: Map Reports & Clusters Endpoint
-app.get('/api/map/reports', (req, res) => {
+app.get('/api/map/reports', async (req, res) => {
   try {
-    const reports = getEnrichedMapReports(req.query);
+    const reports = await getEnrichedMapReports(req.query);
     const clusters = clusterReportsByProximity(reports, 0.8);
 
     res.json({
@@ -1445,10 +1440,9 @@ app.get('/api/map/reports', (req, res) => {
   }
 });
 
-// 10. Phase 3: Civic Hotspots Endpoint
-app.get('/api/map/hotspots', (req, res) => {
+app.get('/api/map/hotspots', async (req, res) => {
   try {
-    const reports = getEnrichedMapReports(req.query);
+    const reports = await getEnrichedMapReports(req.query);
     const hotspots = detectCivicHotspots(reports);
 
     res.json({
@@ -1462,10 +1456,9 @@ app.get('/api/map/hotspots', (req, res) => {
   }
 });
 
-// 11. Phase 3: "The Bigger Picture" Problem Genome Pattern Detection Endpoint
-app.get('/api/map/patterns', (req, res) => {
+app.get('/api/map/patterns', async (req, res) => {
   try {
-    const reports = getEnrichedMapReports(req.query);
+    const reports = await getEnrichedMapReports(req.query);
     const patterns = detectSystemicPatterns(reports);
 
     res.json({
@@ -1482,27 +1475,54 @@ app.get('/api/map/patterns', (req, res) => {
 // ==========================================
 // MUNICIPAL CORPORATION DASHBOARD ENDPOINTS
 // ==========================================
-
-// 12. Municipal Overview KPIs
-app.get('/api/municipal/overview', (req, res) => {
+app.get('/api/municipal/overview', async (req, res) => {
   try {
-    const totalReports = db.prepare('SELECT COUNT(*) as c FROM reports').get().c;
-    const activeGrievances = db.prepare("SELECT COUNT(*) as c FROM reports WHERE status NOT IN ('Confirmed Resolved')").get().c;
-    const pendingTriage = db.prepare("SELECT COUNT(*) as c FROM reports WHERE status IN ('Submitted', 'Under Review')").get().c;
-    const escalatedToHEI = db.prepare("SELECT COUNT(*) as c FROM hei_challenges").get().c;
-    const resolvedCount = db.prepare("SELECT COUNT(*) as c FROM reports WHERE status IN ('Resolved', 'Citizen Confirmation', 'Confirmed Resolved')").get().c;
+    const totalReportsRes = await db.query('SELECT COUNT(*) as c FROM reports');
+    const activeRes = await db.query("SELECT COUNT(*) as c FROM reports WHERE status NOT IN ('Confirmed Resolved')");
+    const pendingRes = await db.query("SELECT COUNT(*) as c FROM reports WHERE status IN ('Submitted', 'Under Review')");
+    const heiRes = await db.query("SELECT COUNT(*) as c FROM hei_challenges");
+    const resolvedRes = await db.query("SELECT COUNT(*) as c FROM reports WHERE status IN ('Resolved', 'Citizen Confirmation', 'Confirmed Resolved')");
 
-    // SLA compliance estimate based on completed assignments
-    const slaCompliancePct = 91.4;
-    const avgTATDays = 2.8;
+    const totalReports = parseInt(totalReportsRes.rows[0]?.c || '0', 10);
+    const activeGrievances = parseInt(activeRes.rows[0]?.c || '0', 10);
+    const pendingTriage = parseInt(pendingRes.rows[0]?.c || '0', 10);
+    const escalatedToHEI = parseInt(heiRes.rows[0]?.c || '0', 10);
+    const resolvedCount = parseInt(resolvedRes.rows[0]?.c || '0', 10);
 
-    // Ward level aggregations
-    const wards = [
-      { ward: 'Ward 14 West (Bandra/Khar)', active: 6, resolved: 14, highSeverity: 4, compliance: 94.2 },
-      { ward: 'Ward 08 Central (Dadar)', active: 5, resolved: 11, highSeverity: 3, compliance: 89.0 },
-      { ward: 'Ward 12 South (Fort/Colaba)', active: 3, resolved: 9, highSeverity: 1, compliance: 96.5 },
-      { ward: 'Ward 19 East (Kurla/Chembur)', active: 8, resolved: 12, highSeverity: 5, compliance: 86.1 },
-    ];
+    const slaCompliancePct = totalReports > 0 
+      ? Number(((resolvedCount / totalReports) * 100).toFixed(1))
+      : 100.0;
+    const avgTATDays = totalReports > 0 ? 1.5 : 0.0;
+
+    // Dynamically calculate zonal ward metrics from citizen reported locations in PostgreSQL
+    const reportsWithLoc = await db.query(`
+      SELECT r.id, r.status, r.severity, l.address, l.city
+      FROM reports r
+      LEFT JOIN report_location l ON r.id = l.report_id
+    `);
+
+    const wardMap = new Map();
+    reportsWithLoc.rows.forEach(r => {
+      const wardName = r.city || r.address || 'Central Municipal Zone';
+      if (!wardMap.has(wardName)) {
+        wardMap.set(wardName, { ward: wardName, active: 0, resolved: 0, highSeverity: 0 });
+      }
+      const item = wardMap.get(wardName);
+      if (['Resolved', 'Citizen Confirmation', 'Confirmed Resolved'].includes(r.status)) {
+        item.resolved += 1;
+      } else {
+        item.active += 1;
+      }
+      if (['Critical', 'Serious', 'Dangerous'].includes(r.severity)) {
+        item.highSeverity += 1;
+      }
+    });
+
+    const wards = Array.from(wardMap.values()).map(w => {
+      const total = w.active + w.resolved;
+      const compliance = total > 0 ? Number(((w.resolved / total) * 100).toFixed(1)) : 100.0;
+      return { ...w, compliance };
+    });
 
     res.json({
       success: true,
@@ -1523,34 +1543,34 @@ app.get('/api/municipal/overview', (req, res) => {
   }
 });
 
-// 13. Municipal Triage Issues List
-app.get('/api/municipal/triage-issues', (req, res) => {
+app.get('/api/municipal/triage-issues', async (req, res) => {
   try {
-    const reports = db.prepare(`
+    const reportsRes = await db.query(`
       SELECT r.*, 
              l.latitude, l.longitude, l.location_source, l.accuracy, l.address, l.city
       FROM reports r
       LEFT JOIN report_location l ON r.id = l.report_id
       ORDER BY r.civic_priority_score DESC, r.created_at DESC
-    `).all();
+    `);
+    const reports = reportsRes.rows;
 
-    const mediaList = db.prepare(`SELECT * FROM report_media`).all();
-    const assignmentsList = db.prepare(`SELECT * FROM report_assignments`).all();
-    const resolutionsList = db.prepare(`SELECT * FROM report_resolutions`).all();
-    const challengesList = db.prepare(`SELECT * FROM hei_challenges`).all();
-    const upvotes = db.prepare(`SELECT report_id, COUNT(*) as vote_count FROM report_upvotes GROUP BY report_id`).all();
+    const mediaListRes = await db.query(`SELECT * FROM report_media`);
+    const assignmentsListRes = await db.query(`SELECT * FROM report_assignments`);
+    const resolutionsListRes = await db.query(`SELECT * FROM report_resolutions`);
+    const challengesListRes = await db.query(`SELECT * FROM hei_challenges`);
+    const upvotesRes = await db.query(`SELECT report_id, COUNT(*) as vote_count FROM report_upvotes GROUP BY report_id`);
 
     const voteMap = new Map();
-    upvotes.forEach(u => voteMap.set(u.report_id, u.vote_count));
+    upvotesRes.rows.forEach(u => voteMap.set(u.report_id, parseInt(u.vote_count || '0', 10)));
 
     const enriched = reports.map(r => ({
       ...r,
       upvote_count: voteMap.get(r.id) || 0,
-      media: mediaList.filter(m => m.report_id === r.id),
-      assignment: assignmentsList.find(a => a.report_id === r.id) || null,
-      resolution: resolutionsList.find(res => res.report_id === r.id) || null,
-      hei_challenge: challengesList.find(c => c.report_id === r.id) || null,
-      is_escalated_to_hei: !!challengesList.find(c => c.report_id === r.id)
+      media: mediaListRes.rows.filter(m => m.report_id === r.id),
+      assignment: assignmentsListRes.rows.find(a => a.report_id === r.id) || null,
+      resolution: resolutionsListRes.rows.find(res => res.report_id === r.id) || null,
+      hei_challenge: challengesListRes.rows.find(c => c.report_id === r.id) || null,
+      is_escalated_to_hei: !!challengesListRes.rows.find(c => c.report_id === r.id)
     }));
 
     res.json({
@@ -1564,33 +1584,31 @@ app.get('/api/municipal/triage-issues', (req, res) => {
   }
 });
 
-// 14. Path A: Routine Municipal Work Order Dispatch
-app.post('/api/municipal/work-order', (req, res) => {
+app.post('/api/municipal/work-order', async (req, res) => {
   try {
     const { reportId, departmentName, officerName, targetHours = 48, priority = 'High', notes } = req.body;
 
-    const report = db.prepare('SELECT * FROM reports WHERE id = ?').get(reportId);
+    const reportRes = await db.query('SELECT * FROM reports WHERE id = $1', [reportId]);
+    const report = reportRes.rows[0];
     if (!report) return res.status(404).json({ error: 'Report not found.' });
 
     const scheduledDate = new Date(Date.now() + targetHours * 3600000).toLocaleString();
     const slaTargetDate = `${targetHours} Hours Target`;
 
-    const tx = db.transaction(() => {
-      // 1. Update report status to 'In Progress'
-      db.prepare("UPDATE reports SET status = 'In Progress', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
+    await db.transaction(async (client) => {
+      await client.query("UPDATE reports SET status = 'In Progress', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [reportId]);
 
-      // 2. Insert/Update Assignment
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_assignments (id, report_id, department_name, officer_name, scheduled_date, sla_target_date, notes, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
         ON CONFLICT(report_id) DO UPDATE SET
-          department_name = excluded.department_name,
-          officer_name = excluded.officer_name,
-          scheduled_date = excluded.scheduled_date,
-          sla_target_date = excluded.sla_target_date,
-          notes = excluded.notes,
+          department_name = EXCLUDED.department_name,
+          officer_name = EXCLUDED.officer_name,
+          scheduled_date = EXCLUDED.scheduled_date,
+          sla_target_date = EXCLUDED.sla_target_date,
+          notes = EXCLUDED.notes,
           updated_at = CURRENT_TIMESTAMP
-      `).run(
+      `, [
         `asg_${crypto.randomBytes(6).toString('hex')}`,
         reportId,
         departmentName,
@@ -1598,21 +1616,18 @@ app.post('/api/municipal/work-order', (req, res) => {
         scheduledDate,
         slaTargetDate,
         notes || `Assigned to ${officerName} with ${targetHours}h SLA.`
-      );
+      ]);
 
-      // 3. Add Timeline Event
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'In Progress', 'authority', ?, 'Municipal Work Order Dispatched', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'In Progress', 'authority', $3, 'Municipal Work Order Dispatched', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         reportId,
         departmentName,
         `Assigned to ${officerName}. Priority: ${priority}. Target SLA: ${targetHours}h. Note: ${notes || 'Crew dispatched.'}`
-      );
+      ]);
     });
-
-    tx();
 
     notifyReportFollowers(
       reportId,
@@ -1628,28 +1643,32 @@ app.post('/api/municipal/work-order', (req, res) => {
   }
 });
 
-// 15. Path B: Escalate to HEI / R&D Innovation Exchange
-app.post('/api/municipal/escalate-hei', (req, res) => {
+app.post('/api/municipal/escalate-hei', async (req, res) => {
   try {
-    const { reportId, researchDomain, researchBrief, departmentMatch = 'Environmental & Civil Engineering', matchPercentage = 94 } = req.body;
+    const { reportId, researchDomain, researchBrief, departmentMatch = 'Environmental & Civil Engineering Dept', matchPercentage = 94 } = req.body;
 
-    const report = db.prepare('SELECT * FROM reports WHERE id = ?').get(reportId);
+    const reportRes = await db.query('SELECT * FROM reports WHERE id = $1', [reportId]);
+    const report = reportRes.rows[0];
     if (!report) return res.status(404).json({ error: 'Report not found.' });
 
-    const loc = db.prepare('SELECT * FROM report_location WHERE report_id = ?').get(reportId);
-    const ward = loc?.address || 'Ward 14 West';
+    const locRes = await db.query('SELECT * FROM report_location WHERE report_id = $1', [reportId]);
+    const ward = locRes.rows[0]?.city || locRes.rows[0]?.address || 'Municipal Ward';
     const challengeId = `chal_${crypto.randomBytes(6).toString('hex')}`;
+    const projectId = `proj_${crypto.randomBytes(6).toString('hex')}`;
 
-    const tx = db.transaction(() => {
-      // 1. Update report status to 'Under Review' with R&D tag
-      db.prepare("UPDATE reports SET status = 'Under Review', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
+    await db.transaction(async (client) => {
+      // PRESERVE the existing lifecycle status (do not downgrade/overwrite)
+      // Only set status to 'Under Review' if report was still in initial 'Submitted' state
+      if (report.status === 'Submitted') {
+        await client.query("UPDATE reports SET status = 'Under Review', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [reportId]);
+      }
 
-      // 2. Insert into hei_challenges
-      db.prepare(`
+      // Create new HEI Challenge
+      await client.query(`
         INSERT INTO hei_challenges (
           id, report_id, title, description, category, severity, ward, department_match, match_percentage, status, escalated_by, research_brief, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 'Municipal Corporation Triage Wing', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', 'Municipal Corporation Triage Wing', $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
         challengeId,
         reportId,
         `R&D Challenge: ${report.category} Structural Solution for ${ward}`,
@@ -1660,20 +1679,68 @@ app.post('/api/municipal/escalate-hei', (req, res) => {
         departmentMatch,
         matchPercentage,
         researchBrief || researchDomain || 'Novel applied technology capstone challenge.'
-      );
+      ]);
 
-      // 3. Add Timeline Event
-      db.prepare(`
+      // Create parallel HEI Innovation Project entity with 4 research milestones
+      const studentTeam = [
+        { name: 'Aarav Sharma', studentId: 'IITB-CE-2024-041', apaarId: '9844-2201-8842', role: 'Lead Design & Hydro Dynamics', hours: 42 },
+        { name: 'Pooja Iyer', studentId: 'IITB-EE-2024-118', apaarId: '9844-2201-9931', role: 'Edge Telemetry & Sensing', hours: 38 },
+        { name: 'Vikram Seth', studentId: 'IITB-ME-2024-082', apaarId: '9844-2201-4412', role: 'Fabrication & Prototype Testing', hours: 35 }
+      ];
+
+      await client.query(`
+        INSERT INTO hei_projects (
+          id, challenge_id, report_id, title, institution_name, department, faculty_lead, faculty_email,
+          student_team_json, current_stage, total_research_hours, total_field_hours, funding_goal, funding_pledged,
+          sdg_goals_json, abstract, status, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 2, 115, 48, 250000, 75000, $10, $11, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
+        projectId,
+        challengeId,
+        reportId,
+        `Multidisciplinary R&D: ${report.category} Infrastructure Engineering for ${ward}`,
+        'Indian Institute of Technology (IIT) / National Institute of Technology (NIT)',
+        departmentMatch,
+        'Prof. Dr. A. V. Deshmukh',
+        'a.deshmukh@civiclabs.edu',
+        JSON.stringify(studentTeam),
+        JSON.stringify(['SDG 6: Clean Water', 'SDG 9: Resilient Infrastructure', 'SDG 11: Sustainable Cities']),
+        researchBrief || 'Field sensing, prototype fabrication, and IoT telemetric municipal pilot.'
+      ]);
+
+      // Insert 4 project milestones
+      const milestones = [
+        { idx: 1, title: 'Stage 1: Problem Definition & Ward Telemetry', desc: 'Geospatial survey, LiDAR mapping and catchment telemetry on site.', status: 'completed', hours: 35 },
+        { idx: 2, title: 'Stage 2: Lab Simulation & Prototyping', desc: 'Material formulation, hydraulic flow modeling, and rapid 3D fabrication.', status: 'in_progress', hours: 40 },
+        { idx: 3, title: 'Stage 3: Field Pilot Testing in Ward', desc: 'On-site installation and 30-day live municipal stress testing.', status: 'pending', hours: 25 },
+        { idx: 4, title: 'Stage 4: Tech Transfer & Municipal Rate Contract', desc: 'Full certification, NEP credit transcript release, and municipal rate contract licensing.', status: 'pending', hours: 15 }
+      ];
+
+      for (const ms of milestones) {
+        await client.query(`
+          INSERT INTO hei_project_milestones (id, project_id, stage_index, title, description, status, research_hours, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+        `, [
+          `ms_${crypto.randomBytes(6).toString('hex')}`,
+          projectId,
+          ms.idx,
+          ms.title,
+          ms.desc,
+          ms.status,
+          ms.hours
+        ]);
+      }
+
+      // Add timeline event to report without overwriting prior routine repair steps
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'Under Review', 'authority', 'Municipal R&D Board', 'Escalated to HEI Innovation Exchange', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'Under Review', 'authority', 'Municipal R&D Board', 'Escalated to HEI Innovation Exchange', $3, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         reportId,
-        `Escalated to Higher Education Institutions (${departmentMatch}). Matched compatibility: ${matchPercentage}%. Brief: ${researchBrief || researchDomain}`
-      );
+        `Escalated to Higher Education Institutions (${departmentMatch}). Matched compatibility: ${matchPercentage}%. Parallel academic research track created.`
+      ]);
     });
-
-    tx();
 
     notifyReportFollowers(
       reportId,
@@ -1682,57 +1749,52 @@ app.post('/api/municipal/escalate-hei', (req, res) => {
       `Issue identified as recurring structural challenge and escalated to HEI Innovation Exchange for university research & prototyping.`
     );
 
-    res.json({ success: true, challengeId, message: 'Challenge escalated to HEI repository.' });
+    res.json({ success: true, challengeId, projectId, message: 'Challenge escalated to HEI repository with parallel project track.' });
   } catch (err) {
     console.error('HEI escalation error:', err);
     res.status(500).json({ error: 'Failed to escalate to HEI.' });
   }
 });
 
-// 16. Municipal Dual-Signoff Field Crew Remediation Upload
-app.post('/api/municipal/resolve-dual-signoff', (req, res) => {
+app.post('/api/municipal/resolve-dual-signoff', async (req, res) => {
   try {
     const { reportId, resolutionNotes, resolvedBy = 'Municipal Field Crew', resolutionPhotoUrl, resolutionPhotoName, latitude, longitude } = req.body;
 
-    const report = db.prepare('SELECT * FROM reports WHERE id = ?').get(reportId);
+    const reportRes = await db.query('SELECT * FROM reports WHERE id = $1', [reportId]);
+    const report = reportRes.rows[0];
     if (!report) return res.status(404).json({ error: 'Report not found.' });
 
-    const tx = db.transaction(() => {
-      // 1. Status transitions to 'Citizen Confirmation' (Pending Citizen Sign-off)
-      db.prepare("UPDATE reports SET status = 'Citizen Confirmation', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(reportId);
+    await db.transaction(async (client) => {
+      await client.query("UPDATE reports SET status = 'Citizen Confirmation', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [reportId]);
 
-      // 2. Insert/Update Resolution
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_resolutions (id, report_id, resolution_notes, resolved_by, resolution_photo_url, resolution_photo_name, resolution_timestamp, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
         ON CONFLICT(report_id) DO UPDATE SET
-          resolution_notes = excluded.resolution_notes,
-          resolved_by = excluded.resolved_by,
-          resolution_photo_url = excluded.resolution_photo_url,
-          resolution_photo_name = excluded.resolution_photo_name,
+          resolution_notes = EXCLUDED.resolution_notes,
+          resolved_by = EXCLUDED.resolved_by,
+          resolution_photo_url = EXCLUDED.resolution_photo_url,
+          resolution_photo_name = EXCLUDED.resolution_photo_name,
           resolution_timestamp = CURRENT_TIMESTAMP
-      `).run(
+      `, [
         `res_${crypto.randomBytes(6).toString('hex')}`,
         reportId,
         resolutionNotes || 'Field remediation completed. Awaiting citizen confirmation.',
         resolvedBy,
         resolutionPhotoUrl || '/samples/flooded_road_mumbai.jpg',
         resolutionPhotoName || 'repair_site_evidence.jpg'
-      );
+      ]);
 
-      // 3. Add Timeline Event
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'Citizen Confirmation', 'authority', ?, 'Remediation Uploaded - Pending Citizen Sign-off', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'Citizen Confirmation', 'authority', $3, 'Remediation Uploaded - Pending Citizen Sign-off', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         reportId,
         resolvedBy,
         `Field crew uploaded completion photos and remediation notes (GPS: ${latitude || 19.076}, ${longitude || 72.877}). Awaiting original reporting citizen sign-off.`
-      );
+      ]);
     });
-
-    tx();
 
     notifyReportFollowers(
       reportId,
@@ -1751,28 +1813,25 @@ app.post('/api/municipal/resolve-dual-signoff', (req, res) => {
 // ==========================================
 // HEI / INSTITUTION DASHBOARD ENDPOINTS
 // ==========================================
-
-// 17. HEI Challenges Discovery
-app.get('/api/institution/challenges', (req, res) => {
+app.get('/api/institution/challenges', async (req, res) => {
   try {
-    const challenges = db.prepare(`
+    const challengesRes = await db.query(`
       SELECT c.*, r.report_code, r.civic_priority_score,
              l.latitude, l.longitude, l.address, l.city
       FROM hei_challenges c
       JOIN reports r ON c.report_id = r.id
       LEFT JOIN report_location l ON r.id = l.report_id
       ORDER BY c.created_at DESC
-    `).all();
+    `);
 
-    res.json({ success: true, count: challenges.length, challenges });
+    res.json({ success: true, count: challengesRes.rows.length, challenges: challengesRes.rows });
   } catch (err) {
     console.error('HEI challenges fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch HEI challenges.' });
   }
 });
 
-// 18. Claim Challenge for R&D Capstone
-app.post('/api/institution/challenges/:id/claim', (req, res) => {
+app.post('/api/institution/challenges/:id/claim', async (req, res) => {
   try {
     const { id } = req.params;
     const {
@@ -1785,21 +1844,20 @@ app.post('/api/institution/challenges/:id/claim', (req, res) => {
       abstract = 'Applied Capstone R&D project addressing local municipal challenge.'
     } = req.body;
 
-    const challenge = db.prepare('SELECT * FROM hei_challenges WHERE id = ?').get(id);
+    const challengeRes = await db.query('SELECT * FROM hei_challenges WHERE id = $1', [id]);
+    const challenge = challengeRes.rows[0];
     if (!challenge) return res.status(404).json({ error: 'Challenge not found.' });
 
     const projectId = `proj_${crypto.randomBytes(6).toString('hex')}`;
 
-    const tx = db.transaction(() => {
-      // 1. Update challenge status
-      db.prepare("UPDATE hei_challenges SET status = 'claimed', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+    await db.transaction(async (client) => {
+      await client.query("UPDATE hei_challenges SET status = 'claimed', updated_at = CURRENT_TIMESTAMP WHERE id = $1", [id]);
 
-      // 2. Create hei_projects
-      db.prepare(`
+      await client.query(`
         INSERT INTO hei_projects (
           id, challenge_id, report_id, title, institution_name, department, faculty_lead, faculty_email, student_team_json, current_stage, total_research_hours, total_field_hours, funding_goal, funding_pledged, sdg_goals_json, abstract, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 30, 10, ?, 0, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, 30, 10, $10, 0, $11, $12, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
         projectId,
         id,
         challenge.report_id,
@@ -1812,9 +1870,8 @@ app.post('/api/institution/challenges/:id/claim', (req, res) => {
         fundingGoal,
         JSON.stringify(['SDG 6: Clean Water', 'SDG 11: Sustainable Cities']),
         abstract
-      );
+      ]);
 
-      // 3. Create 4 Milestones
       const milestones = [
         { stage: 1, title: 'Feasibility & Literature Study', desc: 'Baseline testing and engineering specs.' },
         { stage: 2, title: 'Simulation & CAD/Lab Testing', desc: 'Computational model and scale bench test.' },
@@ -1822,13 +1879,12 @@ app.post('/api/institution/challenges/:id/claim', (req, res) => {
         { stage: 4, title: 'Field Deployment & Municipal Pilot', desc: 'On-site municipal pilot validation.' },
       ];
 
-      const insMs = db.prepare(`
-        INSERT INTO hei_project_milestones (id, project_id, stage_index, title, description, status, research_hours, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
-
-      milestones.forEach((m, idx) => {
-        insMs.run(
+      for (let idx = 0; idx < milestones.length; idx++) {
+        const m = milestones[idx];
+        await client.query(`
+          INSERT INTO hei_project_milestones (id, project_id, stage_index, title, description, status, research_hours, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+        `, [
           `ms_${projectId}_s${m.stage}`,
           projectId,
           m.stage,
@@ -1836,22 +1892,19 @@ app.post('/api/institution/challenges/:id/claim', (req, res) => {
           m.desc,
           idx === 0 ? 'in_progress' : 'pending',
           idx === 0 ? 30 : 0
-        );
-      });
+        ]);
+      }
 
-      // 4. Update report timeline
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'In Progress', 'authority', ?, 'Capstone R&D Claimed by University', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'In Progress', 'authority', $3, 'Capstone R&D Claimed by University', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         challenge.report_id,
         institutionName,
         `${institutionName} (${department}) claimed challenge under lead ${facultyLead}. Student team assembled.`
-      );
+      ]);
     });
-
-    tx();
 
     res.json({ success: true, projectId, message: 'Challenge claimed and Capstone workspace initialized.' });
   } catch (err) {
@@ -1860,31 +1913,31 @@ app.post('/api/institution/challenges/:id/claim', (req, res) => {
   }
 });
 
-// 19. HEI Projects List
-app.get('/api/institution/projects', (req, res) => {
+app.get('/api/institution/projects', async (req, res) => {
   try {
-    const projects = db.prepare(`
+    const projectsRes = await db.query(`
       SELECT p.*, r.report_code, r.category as report_category
       FROM hei_projects p
       JOIN reports r ON p.report_id = r.id
       ORDER BY p.updated_at DESC
-    `).all();
+    `);
+    const projects = projectsRes.rows;
 
-    const milestones = db.prepare('SELECT * FROM hei_project_milestones ORDER BY stage_index ASC').all();
-    const grants = db.prepare('SELECT * FROM csr_grants').all();
-    const tranches = db.prepare('SELECT * FROM csr_escrow_tranches').all();
+    const milestonesRes = await db.query('SELECT * FROM hei_project_milestones ORDER BY stage_index ASC');
+    const grantsRes = await db.query('SELECT * FROM csr_grants');
+    const tranchesRes = await db.query('SELECT * FROM csr_escrow_tranches');
 
     const enriched = projects.map(p => ({
       ...p,
-      student_team: JSON.parse(p.student_team_json || '[]'),
-      sdg_goals: JSON.parse(p.sdg_goals_json || '[]'),
-      milestones: milestones.filter(m => m.project_id === p.id).map(m => ({
+      student_team: parseJsonSafe(p.student_team_json, []),
+      sdg_goals: parseJsonSafe(p.sdg_goals_json, []),
+      milestones: milestonesRes.rows.filter(m => m.project_id === p.id).map(m => ({
         ...m,
-        deliverables: m.deliverables_json ? JSON.parse(m.deliverables_json) : null
+        deliverables: parseJsonSafe(m.deliverables_json)
       })),
-      grants: grants.filter(g => g.project_id === p.id).map(g => ({
+      grants: grantsRes.rows.filter(g => g.project_id === p.id).map(g => ({
         ...g,
-        tranches: tranches.filter(t => t.grant_id === g.id)
+        tranches: tranchesRes.rows.filter(t => t.grant_id === g.id)
       }))
     }));
 
@@ -1895,58 +1948,53 @@ app.get('/api/institution/projects', (req, res) => {
   }
 });
 
-// 20. Update HEI Milestone Pipeline
-app.post('/api/institution/projects/:id/milestones/:stageIndex', (req, res) => {
+app.post('/api/institution/projects/:id/milestones/:stageIndex', async (req, res) => {
   try {
     const { id, stageIndex } = req.params;
     const { status = 'completed', deliverables = {}, researchHours = 35 } = req.body;
     const stageNum = parseInt(stageIndex, 10);
 
-    const project = db.prepare('SELECT * FROM hei_projects WHERE id = ?').get(id);
+    const projectRes = await db.query('SELECT * FROM hei_projects WHERE id = $1', [id]);
+    const project = projectRes.rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found.' });
 
-    const tx = db.transaction(() => {
-      // 1. Update current milestone
-      db.prepare(`
+    await db.transaction(async (client) => {
+      await client.query(`
         UPDATE hei_project_milestones
-        SET status = ?, deliverables_json = ?, research_hours = ?, completed_at = CURRENT_TIMESTAMP
-        WHERE project_id = ? AND stage_index = ?
-      `).run(status, JSON.stringify(deliverables), researchHours, id, stageNum);
+        SET status = $1, deliverables_json = $2, research_hours = $3, completed_at = CURRENT_TIMESTAMP
+        WHERE project_id = $4 AND stage_index = $5
+      `, [status, JSON.stringify(deliverables), researchHours, id, stageNum]);
 
-      // 2. If stageNum < 4 and completed, unlock next milestone
       if (status === 'completed' && stageNum < 4) {
-        db.prepare(`
+        await client.query(`
           UPDATE hei_project_milestones
           SET status = 'in_progress'
-          WHERE project_id = ? AND stage_index = ? AND status = 'pending'
-        `).run(id, stageNum + 1);
+          WHERE project_id = $1 AND stage_index = $2 AND status = 'pending'
+        `, [id, stageNum + 1]);
 
-        db.prepare(`
+        await client.query(`
           UPDATE hei_projects
-          SET current_stage = ?, total_research_hours = total_research_hours + ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(stageNum + 1, researchHours, id);
+          SET current_stage = $1, total_research_hours = total_research_hours + $2, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $3
+        `, [stageNum + 1, researchHours, id]);
       } else if (status === 'completed' && stageNum === 4) {
-        db.prepare(`
+        await client.query(`
           UPDATE hei_projects
-          SET current_stage = 4, status = 'pilot_ready', total_research_hours = total_research_hours + ?, updated_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(researchHours, id);
+          SET current_stage = 4, status = 'pilot_ready', total_research_hours = total_research_hours + $1, updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+        `, [researchHours, id]);
       }
 
-      // 3. Timeline event
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'In Progress', 'authority', ?, 'Capstone Milestone Advanced', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'In Progress', 'authority', $3, 'Capstone Milestone Advanced', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         project.report_id,
         project.institution_name,
         `Stage ${stageNum} milestone completed. Deliverables uploaded to R&D registry.`
-      );
+      ]);
     });
-
-    tx();
 
     res.json({ success: true, message: `Stage ${stageNum} milestone updated successfully.` });
   } catch (err) {
@@ -1955,35 +2003,34 @@ app.post('/api/institution/projects/:id/milestones/:stageIndex', (req, res) => {
   }
 });
 
-// 21. NEP 2020 Credit Registry & Certificate Generation
-app.get('/api/institution/nep-registry', (req, res) => {
+app.get('/api/institution/nep-registry', async (req, res) => {
   try {
-    const credits = db.prepare(`
+    const creditsRes = await db.query(`
       SELECT c.*, p.title as project_title, p.institution_name as institution
       FROM student_nep_credits c
       JOIN hei_projects p ON c.project_id = p.id
       ORDER BY c.created_at DESC
-    `).all();
+    `);
 
-    res.json({ success: true, count: credits.length, credits });
+    res.json({ success: true, count: creditsRes.rows.length, credits: creditsRes.rows });
   } catch (err) {
     console.error('NEP registry fetch error:', err);
     res.status(500).json({ error: 'Failed to fetch NEP credit registry.' });
   }
 });
 
-app.post('/api/institution/nep-registry/generate-certificate', (req, res) => {
+app.post('/api/institution/nep-registry/generate-certificate', async (req, res) => {
   try {
     const { studentName, studentId, apaarId, institutionName, projectId, researchHours = 60, fieldHours = 20 } = req.body;
     const certId = `nep_cert_${crypto.randomBytes(6).toString('hex')}`;
     const verificationHash = `SHA256:${crypto.createHash('sha256').update(`${studentId}-${apaarId}-${projectId}-${Date.now()}`).digest('hex')}`;
     const creditsAwarded = Math.round(((researchHours + fieldHours) / 20) * 10) / 10;
 
-    db.prepare(`
+    await db.query(`
       INSERT INTO student_nep_credits (
         id, student_name, student_id, apaar_id, institution_name, project_id, research_hours, field_hours, credits_awarded, verification_hash, certificate_issued_at, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `).run(
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [
       certId,
       studentName,
       studentId,
@@ -1994,7 +2041,7 @@ app.post('/api/institution/nep-registry/generate-certificate', (req, res) => {
       fieldHours,
       creditsAwarded,
       verificationHash
-    );
+    ]);
 
     res.json({
       success: true,
@@ -2018,31 +2065,30 @@ app.post('/api/institution/nep-registry/generate-certificate', (req, res) => {
 // ==========================================
 // INDUSTRY & CSR PARTNER DASHBOARD ENDPOINTS
 // ==========================================
-
-// 22. Societal Innovation Marketplace
-app.get('/api/industry/marketplace', (req, res) => {
+app.get('/api/industry/marketplace', async (req, res) => {
   try {
-    const projects = db.prepare(`
+    const projectsRes = await db.query(`
       SELECT p.*, r.report_code, r.category as report_category,
              l.address, l.city, l.latitude, l.longitude
       FROM hei_projects p
       JOIN reports r ON p.report_id = r.id
       LEFT JOIN report_location l ON r.id = l.report_id
       ORDER BY p.funding_pledged DESC, p.created_at DESC
-    `).all();
+    `);
+    const projects = projectsRes.rows;
 
-    const milestones = db.prepare('SELECT * FROM hei_project_milestones ORDER BY stage_index ASC').all();
-    const grants = db.prepare('SELECT * FROM csr_grants').all();
-    const tranches = db.prepare('SELECT * FROM csr_escrow_tranches').all();
+    const milestonesRes = await db.query('SELECT * FROM hei_project_milestones ORDER BY stage_index ASC');
+    const grantsRes = await db.query('SELECT * FROM csr_grants');
+    const tranchesRes = await db.query('SELECT * FROM csr_escrow_tranches');
 
     const marketplace = projects.map(p => ({
       ...p,
-      student_team: JSON.parse(p.student_team_json || '[]'),
-      sdg_goals: JSON.parse(p.sdg_goals_json || '[]'),
-      milestones: milestones.filter(m => m.project_id === p.id),
-      grants: grants.filter(g => g.project_id === p.id).map(g => ({
+      student_team: parseJsonSafe(p.student_team_json, []),
+      sdg_goals: parseJsonSafe(p.sdg_goals_json, []),
+      milestones: milestonesRes.rows.filter(m => m.project_id === p.id),
+      grants: grantsRes.rows.filter(g => g.project_id === p.id).map(g => ({
         ...g,
-        tranches: tranches.filter(t => t.grant_id === g.id)
+        tranches: tranchesRes.rows.filter(t => t.grant_id === g.id)
       }))
     }));
 
@@ -2053,25 +2099,24 @@ app.get('/api/industry/marketplace', (req, res) => {
   }
 });
 
-// 23. Corporate CSR Pledge Creation
-app.post('/api/industry/pledge', (req, res) => {
+app.post('/api/industry/pledge', async (req, res) => {
   try {
     const { projectId, corporateName, cin, csrRegNo, contactPerson, contactEmail, amount = 250000 } = req.body;
 
-    const project = db.prepare('SELECT * FROM hei_projects WHERE id = ?').get(projectId);
+    const projectRes = await db.query('SELECT * FROM hei_projects WHERE id = $1', [projectId]);
+    const project = projectRes.rows[0];
     if (!project) return res.status(404).json({ error: 'Project not found.' });
 
     const grantId = `grant_${crypto.randomBytes(6).toString('hex')}`;
     const t1Amount = amount * 0.3;
     const t2Amount = amount * 0.7;
 
-    const tx = db.transaction(() => {
-      // 1. Insert Grant
-      db.prepare(`
+    await db.transaction(async (client) => {
+      await client.query(`
         INSERT INTO csr_grants (
           id, project_id, corporate_name, cin, csr_reg_no, contact_person, contact_email, total_pledge_amount, disbursed_amount, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'pledged', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `).run(
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, 'pledged', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
         grantId,
         projectId,
         corporateName,
@@ -2080,39 +2125,34 @@ app.post('/api/industry/pledge', (req, res) => {
         contactPerson,
         contactEmail,
         amount
-      );
+      ]);
 
-      // 2. Insert Tranche 1 (30%) & Tranche 2 (70%)
-      db.prepare(`
+      await client.query(`
         INSERT INTO csr_escrow_tranches (id, grant_id, tranche_number, percentage, amount, trigger_condition, status, created_at)
-        VALUES (?, ?, 1, 30.0, ?, 'Disbursed upon HEI Lab Prototype Verification & CAD Approval', 'escrow_locked', CURRENT_TIMESTAMP)
-      `).run(`tranche_1_${grantId}`, grantId, t1Amount);
+        VALUES ($1, $2, 1, 30.0, $3, 'Disbursed upon HEI Lab Prototype Verification & CAD Approval', 'escrow_locked', CURRENT_TIMESTAMP)
+      `, [`tranche_1_${grantId}`, grantId, t1Amount]);
 
-      db.prepare(`
+      await client.query(`
         INSERT INTO csr_escrow_tranches (id, grant_id, tranche_number, percentage, amount, trigger_condition, status, created_at)
-        VALUES (?, ?, 2, 70.0, ?, 'Disbursed upon Municipal Field Deployment & Dual-Signoff Pilot Verification', 'escrow_locked', CURRENT_TIMESTAMP)
-      `).run(`tranche_2_${grantId}`, grantId, t2Amount);
+        VALUES ($1, $2, 2, 70.0, $3, 'Disbursed upon Municipal Field Deployment & Dual-Signoff Pilot Verification', 'escrow_locked', CURRENT_TIMESTAMP)
+      `, [`tranche_2_${grantId}`, grantId, t2Amount]);
 
-      // 3. Update project funding pledged
-      db.prepare(`
+      await client.query(`
         UPDATE hei_projects
-        SET funding_pledged = funding_pledged + ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(amount, projectId);
+        SET funding_pledged = funding_pledged + $1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+      `, [amount, projectId]);
 
-      // 4. Add Timeline Event
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'In Progress', 'authority', ?, 'CSR Grant Pledged by Corporate Partner', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'In Progress', 'authority', $3, 'CSR Grant Pledged by Corporate Partner', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         project.report_id,
         corporateName,
         `${corporateName} pledged ₹${amount.toLocaleString('en-IN')} CSR grant (30/70 Escrow Tranche structure) for student prototype & pilot deployment.`
-      );
+      ]);
     });
-
-    tx();
 
     res.json({ success: true, grantId, message: 'CSR Grant Pledged and smart escrow allocated.' });
   } catch (err) {
@@ -2121,47 +2161,45 @@ app.post('/api/industry/pledge', (req, res) => {
   }
 });
 
-// 24. Escrow Tranche Disbursement
-app.post('/api/industry/escrow/release', (req, res) => {
+app.post('/api/industry/escrow/release', async (req, res) => {
   try {
     const { trancheId, releaseNotes = 'Tranche released following technical verification' } = req.body;
 
-    const tranche = db.prepare('SELECT * FROM csr_escrow_tranches WHERE id = ?').get(trancheId);
+    const trancheRes = await db.query('SELECT * FROM csr_escrow_tranches WHERE id = $1', [trancheId]);
+    const tranche = trancheRes.rows[0];
     if (!tranche) return res.status(404).json({ error: 'Tranche not found.' });
 
-    const grant = db.prepare('SELECT * FROM csr_grants WHERE id = ?').get(tranche.grant_id);
-    const project = db.prepare('SELECT * FROM hei_projects WHERE id = ?').get(grant.project_id);
+    const grantRes = await db.query('SELECT * FROM csr_grants WHERE id = $1', [tranche.grant_id]);
+    const grant = grantRes.rows[0];
 
-    const tx = db.transaction(() => {
-      // 1. Mark tranche disbursed
-      db.prepare(`
+    const projectRes = await db.query('SELECT * FROM hei_projects WHERE id = $1', [grant.project_id]);
+    const project = projectRes.rows[0];
+
+    await db.transaction(async (client) => {
+      await client.query(`
         UPDATE csr_escrow_tranches
-        SET status = 'disbursed', disbursed_at = CURRENT_TIMESTAMP, release_notes = ?
-        WHERE id = ?
-      `).run(releaseNotes, trancheId);
+        SET status = 'disbursed', disbursed_at = CURRENT_TIMESTAMP, release_notes = $1
+        WHERE id = $2
+      `, [releaseNotes, trancheId]);
 
-      // 2. Update grant disbursed amount
-      db.prepare(`
+      await client.query(`
         UPDATE csr_grants
-        SET disbursed_amount = disbursed_amount + ?,
-            status = CASE WHEN disbursed_amount + ? >= total_pledge_amount THEN 'fully_disbursed' ELSE 'partially_disbursed' END,
+        SET disbursed_amount = disbursed_amount + $1,
+            status = CASE WHEN disbursed_amount + $1 >= total_pledge_amount THEN 'fully_disbursed' ELSE 'partially_disbursed' END,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(tranche.amount, tranche.amount, grant.id);
+        WHERE id = $2
+      `, [tranche.amount, grant.id]);
 
-      // 3. Timeline event
-      db.prepare(`
+      await client.query(`
         INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
-        VALUES (?, ?, 'In Progress', 'authority', ?, 'CSR Escrow Tranche Disbursed', ?, CURRENT_TIMESTAMP)
-      `).run(
+        VALUES ($1, $2, 'In Progress', 'authority', $3, 'CSR Escrow Tranche Disbursed', $4, CURRENT_TIMESTAMP)
+      `, [
         `tml_${crypto.randomBytes(6).toString('hex')}`,
         project.report_id,
         grant.corporate_name,
         `Tranche ${tranche.tranche_number} (₹${tranche.amount.toLocaleString('en-IN')}) disbursed from Escrow to ${project.institution_name} R&D account.`
-      );
+      ]);
     });
-
-    tx();
 
     res.json({ success: true, message: `Tranche ${tranche.tranche_number} released successfully.` });
   } catch (err) {
@@ -2170,33 +2208,32 @@ app.post('/api/industry/escrow/release', (req, res) => {
   }
 });
 
-// 25. Corporate Mentorship & Tech Transfer Hub
-app.get('/api/industry/mentorship-hub', (req, res) => {
+app.get('/api/industry/mentorship-hub', async (req, res) => {
   try {
-    const mentors = db.prepare('SELECT * FROM corporate_mentors ORDER BY created_at DESC').all();
-    const agreements = db.prepare(`
+    const mentorsRes = await db.query('SELECT * FROM corporate_mentors ORDER BY created_at DESC');
+    const agreementsRes = await db.query(`
       SELECT t.*, p.title as project_title, p.institution_name
       FROM tech_transfer_agreements t
       JOIN hei_projects p ON t.project_id = p.id
       ORDER BY t.created_at DESC
-    `).all();
+    `);
 
-    res.json({ success: true, mentors, agreements });
+    res.json({ success: true, mentors: mentorsRes.rows, agreements: agreementsRes.rows });
   } catch (err) {
     console.error('Mentorship hub error:', err);
     res.status(500).json({ error: 'Failed to fetch mentorship hub.' });
   }
 });
 
-app.post('/api/industry/mentorship/register', (req, res) => {
+app.post('/api/industry/mentorship/register', async (req, res) => {
   try {
     const { name, company, designation, expertiseDomain, email, officeHoursSlot } = req.body;
     const mentorId = `mentor_${crypto.randomBytes(6).toString('hex')}`;
 
-    db.prepare(`
+    await db.query(`
       INSERT INTO corporate_mentors (id, name, company, designation, expertise_domain, email, office_hours_slot, status, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'available', CURRENT_TIMESTAMP)
-    `).run(mentorId, name, company, designation, expertiseDomain, email, officeHoursSlot);
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'available', CURRENT_TIMESTAMP)
+    `, [mentorId, name, company, designation, expertiseDomain, email, officeHoursSlot]);
 
     res.json({ success: true, mentorId, message: 'Corporate mentor registered successfully.' });
   } catch (err) {
@@ -2205,15 +2242,15 @@ app.post('/api/industry/mentorship/register', (req, res) => {
   }
 });
 
-app.post('/api/industry/tech-transfer/initiate', (req, res) => {
+app.post('/api/industry/tech-transfer/initiate', async (req, res) => {
   try {
     const { projectId, corporatePartner, municipalPartner, agreementType = 'Municipal Rate Contract', royaltyPercentage = 3.0, termsSummary } = req.body;
     const agreementId = `tt_${crypto.randomBytes(6).toString('hex')}`;
 
-    db.prepare(`
+    await db.query(`
       INSERT INTO tech_transfer_agreements (id, project_id, corporate_partner, municipal_partner, agreement_type, royalty_percentage, status, terms_summary, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'in_review', ?, CURRENT_TIMESTAMP)
-    `).run(agreementId, projectId, corporatePartner, municipalPartner, agreementType, royaltyPercentage, termsSummary);
+      VALUES ($1, $2, $3, $4, $5, $6, 'in_review', $7, CURRENT_TIMESTAMP)
+    `, [agreementId, projectId, corporatePartner, municipalPartner, agreementType, royaltyPercentage, termsSummary]);
 
     res.json({ success: true, agreementId, message: 'Tech transfer agreement initiated.' });
   } catch (err) {
@@ -2222,14 +2259,25 @@ app.post('/api/industry/tech-transfer/initiate', (req, res) => {
   }
 });
 
-// Start Express Server
-app.listen(PORT, () => {
-  console.log(`=======================================================`);
-  console.log(`  ALCHEMINDS MULTI-STAKEHOLDER CIVIC API SERVER        `);
-  console.log(`  Roles: Citizen, Municipal, HEI, Industry            `);
-  console.log(`  Port: ${PORT}                                       `);
-  console.log(`  Uploads: ${uploadsDir}                              `);
-  console.log(`=======================================================`);
-});
+// ==========================================
+// INITIALIZE DATABASE AND START SERVER
+// ==========================================
+async function startServer() {
+  try {
+    await initDatabase();
+  } catch (dbInitErr) {
+    console.error('⚠️ Database initialization warning:', dbInitErr.message);
+    console.warn('Backend server will start and retry queries on incoming requests.');
+  }
 
+  app.listen(PORT, () => {
+    console.log(`=======================================================`);
+    console.log(`  ALCHEMINDS MULTI-STAKEHOLDER POSTGRESQL API SERVER   `);
+    console.log(`  Extensions: PostGIS (Spatial) & pgvector (AI Search) `);
+    console.log(`  Port: ${PORT}                                       `);
+    console.log(`  Uploads: ${uploadsDir}                              `);
+    console.log(`=======================================================`);
+  });
+}
 
+startServer();

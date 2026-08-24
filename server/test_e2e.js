@@ -13,7 +13,7 @@ async function runE2ETest() {
   const healthRes = await fetch('http://localhost:3001/api/health');
   const healthData = await healthRes.json();
   console.log('Health Response:', healthData);
-  if (healthData.status !== 'healthy') throw new Error('Health check failed');
+  if (healthData.status !== 'ok' && healthData.status !== 'healthy') throw new Error('Health check failed');
 
   // 2. Test Multipart Media Upload with Geotagged Photo
   console.log('\n--- 2. Testing Geotagged Media Upload ---');
