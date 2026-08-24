@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Play, FastForward, Wrench } from 'lucide-react';
+import { apiFetch } from '../utils/userSession';
 
 interface AuthoritySimulatorProps {
   reportId: string;
@@ -17,7 +18,7 @@ export const AuthoritySimulator: React.FC<AuthoritySimulatorProps> = ({
   const handleAdvance = async (targetStage?: string) => {
     setIsSimulating(true);
     try {
-      const res = await fetch(`/api/reports/${reportId}/simulate-advance`, {
+      const res = await apiFetch(`/api/reports/${reportId}/simulate-advance`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ targetStage }),

@@ -52,16 +52,21 @@ export function setCitizenLocation(location: SavedUserLocation): void {
   localStorage.setItem(USER_LOCATION_KEY, JSON.stringify(location));
 }
 
+export const API_BASE_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+
 /**
- * Wrapper for API calls including user ID header.
+ * Wrapper for API calls including user ID header and configured API base URL.
  */
 export async function apiFetch(url: string, options: RequestInit = {}) {
   const userId = getCitizenUserId();
   const headers = new Headers(options.headers || {});
   headers.set('x-user-id', userId);
 
-  return fetch(url, {
+  const fullUrl = (url.startsWith('http') || !API_BASE_URL) ? url : `${API_BASE_URL}${url}`;
+
+  return fetch(fullUrl, {
     ...options,
     headers,
   });
 }
+

@@ -8,6 +8,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import type { VerificationInfo } from '../types';
+import { apiFetch } from '../utils/userSession';
 
 interface CitizenVerificationProps {
   reportId: string;
@@ -37,7 +38,7 @@ export const CitizenVerification: React.FC<CitizenVerificationProps> = ({
     setErrorMsg(null);
 
     try {
-      const res = await fetch(`/api/reports/${reportId}/verify`, {
+      const res = await apiFetch(`/api/reports/${reportId}/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

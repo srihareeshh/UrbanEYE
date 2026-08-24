@@ -26,6 +26,8 @@ import {
   Maximize2,
 } from 'lucide-react';
 
+import { apiFetch } from '../utils/userSession';
+
 // ─── Type Definitions ────────────────────────────────────────────────────────
 
 interface MapReport {
@@ -1192,9 +1194,9 @@ export const CommunityMap: React.FC<Props> = ({
     try {
       const qs = buildQuery(f);
       const [mapRes, hotspotRes, patternRes] = await Promise.all([
-        fetch(`/api/map/reports?${qs}`),
-        fetch(`/api/map/hotspots?${qs}`),
-        fetch(`/api/map/patterns?${qs}`),
+        apiFetch(`/api/map/reports?${qs}`),
+        apiFetch(`/api/map/hotspots?${qs}`),
+        apiFetch(`/api/map/patterns?${qs}`),
       ]);
 
       const mapData = await mapRes.json();
