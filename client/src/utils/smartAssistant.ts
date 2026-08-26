@@ -16,7 +16,7 @@ export function analyzeSmartSuggestions(text: string, mediaNames: string[] = [])
   let reason = '';
 
   // 1. Water keywords
-  if (/\b(water|flood|flooding|waterlog|waterlogged|drain|drainage|pipe|burst|leak|tap|sewer|monsoon)\b/i.test(combined)) {
+  if (/\b(water|flood|flooding|waterlog|waterlogged|drain|drainage|pipe|burst|leak|tap|sewer|monsoon|flooded)\b/i.test(combined)) {
     category = 'Water';
     reason = 'Identified water or drainage related indicators';
   }
