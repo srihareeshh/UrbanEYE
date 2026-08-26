@@ -209,8 +209,6 @@ export interface UserActivityData {
   unreadCount: number;
 }
 
-<<<<<<< HEAD
-=======
 // ==========================================
 // MULTI-STAKEHOLDER DATA MODELS
 // ==========================================
@@ -399,4 +397,3 @@ export interface TechTransferAgreement {
   created_at: string;
 }
 
->>>>>>> 24fe15c (added municipality,institution,government dashboards)

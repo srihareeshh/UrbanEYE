@@ -1,8 +1,3 @@
-<<<<<<< HEAD
-import React from 'react';
-import { ShieldAlert, ListFilter, PlusCircle, Sun, Moon, MapPin, Sparkles } from 'lucide-react';
-
-=======
 import React, { useState, useRef, useEffect } from 'react';
 import {
   ShieldAlert,
@@ -23,27 +18,19 @@ import type { StakeholderRole } from '../types';
 
 import { useGlobalStore } from '../store/globalStore';
 
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
 export type View = 'report' | 'community' | 'tracker' | 'map' | 'detail';
 
 interface NavbarProps {
   currentView: View;
-<<<<<<< HEAD
-  onNavigate: (view: 'report' | 'community' | 'tracker' | 'map') => void;
-=======
   onNavigate?: (view: 'report' | 'community' | 'tracker' | 'map' | 'detail') => void;
   onChangeView?: (view: 'report' | 'community' | 'tracker' | 'map' | 'detail') => void;
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
   theme: 'dark' | 'light';
   onToggleTheme: () => void;
   reportCount?: number;
   unreadCount?: number;
-<<<<<<< HEAD
-=======
   unreadNotificationsCount?: number;
   currentRole?: StakeholderRole;
   onRoleChange?: (role: StakeholderRole) => void;
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
 }
 
 const ROLES: Array<{
@@ -106,13 +93,6 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleTheme,
   reportCount = 0,
   unreadCount = 0,
-<<<<<<< HEAD
-}) => {
-  const navItems: { id: 'report' | 'community' | 'tracker' | 'map'; label: string; Icon: React.FC<{ size?: number }>; badge?: number }[] = [
-    { id: 'report', label: 'Report', Icon: PlusCircle },
-    { id: 'community', label: 'Community', Icon: Sparkles },
-    { id: 'tracker', label: 'My Activity', Icon: ListFilter, badge: unreadCount > 0 ? unreadCount : (reportCount > 0 ? reportCount : undefined) },
-=======
   unreadNotificationsCount = 0,
   currentRole: propRole,
   onRoleChange: propRoleChange,
@@ -146,7 +126,6 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'report', label: 'Report', Icon: PlusCircle },
     { id: 'community', label: 'Community', Icon: Sparkles },
     { id: 'tracker', label: 'My Activity', Icon: ListFilter, badge: effectiveUnread > 0 ? effectiveUnread : (reportCount > 0 ? reportCount : undefined) },
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
     { id: 'map', label: 'Map', Icon: MapPin },
   ];
 
@@ -229,11 +208,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   fontWeight: 700,
                 }}
               >
-<<<<<<< HEAD
-                CIVIC PLATFORM
-=======
                 QUAD-STAKEHOLDER
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
               </span>
             </div>
             <div
@@ -243,11 +218,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 fontWeight: 500,
               }}
             >
-<<<<<<< HEAD
-              Community Issues · Upvotes · Lifecycle Tracking
-=======
               Citizen · Municipal ULB · HEI Universities · CSR Industry
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
             </div>
           </div>
         </div>

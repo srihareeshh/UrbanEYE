@@ -20,13 +20,10 @@ import { ReportDetailView } from './components/ReportDetailView';
 import { CommunityIssuesFeed } from './components/CommunityIssuesFeed';
 import { CommunityMap } from './components/CommunityMap';
 import { ErrorBoundary } from './components/ErrorBoundary';
-<<<<<<< HEAD
-=======
 import { GlobalProvider, useGlobalStore } from './store/globalStore';
 import { MunicipalDashboard } from './components/municipal/MunicipalDashboard';
 import { InstitutionDashboard } from './components/institution/InstitutionDashboard';
 import { IndustryDashboard } from './components/industry/IndustryDashboard';
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
 import type {
   EvidenceItem,
   LocationState,
@@ -35,13 +32,9 @@ import type {
 } from './types';
 import { apiFetch, getCitizenUserId } from './utils/userSession';
 
-<<<<<<< HEAD
-export function App() {
-=======
 function AppContent() {
   const { currentRole, setRole } = useGlobalStore();
 
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
   const [currentView, setCurrentView] = useState<View>('community');
   const [selectedReportId, setSelectedReportId] = useState<string | null>(null);
   const [mapFocusReportId, setMapFocusReportId] = useState<string | null>(null);
@@ -84,10 +77,6 @@ function AppContent() {
   const [reportCount, setReportCount] = useState<number>(0);
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
 
-<<<<<<< HEAD
-  // Initialize citizen user ID, theme & load counts
-  useEffect(() => {
-=======
   // URL route sync on load
   useEffect(() => {
     const pathname = window.location.pathname.toLowerCase();
@@ -102,7 +91,6 @@ function AppContent() {
 
   // Initialize citizen user ID, theme & load counts
   useEffect(() => {
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
     getCitizenUserId(); // Ensure citizen identity initialized
 
     const savedTheme = (localStorage.getItem('alcheminds-theme') as 'dark' | 'light') || 'dark';
@@ -158,11 +146,7 @@ function AppContent() {
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
-<<<<<<< HEAD
-    setTimeout(() => setToastMessage(null), 3200);
-=======
     setTimeout(() => setToastMessage(null), 3500);
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
   };
 
   // Evidence handlers
@@ -240,61 +224,6 @@ function AppContent() {
         if (ev.file) {
           formData.append('media', ev.file, ev.originalName);
         }
-<<<<<<< HEAD
-
-        const uploadRes = await fetch('/api/upload', {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!uploadRes.ok) {
-          throw new Error('Failed to upload media files.');
-        }
-
-        const uploadData = await uploadRes.json();
-        uploadedMedia = uploadData.files || [];
-      }
-
-      setSubmitProgressText('Registering report & initiating lifecycle audit...');
-
-      const payload = {
-        userId: getCitizenUserId(),
-        category: details.category,
-        description: details.description,
-        duration: details.duration,
-        recurrence: details.recurrence,
-        severity: details.severity,
-        isRiskPresent: details.isRiskPresent,
-        riskDescription: details.riskDescription,
-        location: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          source: location.source,
-          accuracy: location.accuracy,
-          address: location.address,
-          city: location.city,
-          state: location.state,
-          postalCode: location.postalCode,
-        },
-        media: uploadedMedia.map((m) => ({
-          mediaId: m.mediaId,
-          mediaType: m.mediaType,
-          originalName: m.originalName,
-          fileName: m.fileName,
-          filePath: m.filePath,
-          mimeType: m.mimeType,
-          fileSize: m.fileSize,
-          exif: m.exif,
-        })),
-        smartSuggested: details.smartSuggested,
-      };
-
-      const res = await apiFetch('/api/reports', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-=======
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
       });
 
       formData.append('category', details.category);
@@ -362,32 +291,6 @@ function AppContent() {
     setCurrentView('detail');
   };
 
-<<<<<<< HEAD
-  const handleViewOnMap = (report: any) => {
-    const lat = Number(report.latitude ?? report.location?.latitude);
-    const lng = Number(report.longitude ?? report.location?.longitude);
-    const reportId = report.id || report.report_id || report.report_code;
-    setMapFocusReportId(reportId);
-    if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) {
-      setMapCenter([lat, lng]);
-    }
-    setCurrentView('map');
-  };
-
-  return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-      {/* Navigation Top Bar */}
-      <Navbar
-        currentView={currentView}
-        onNavigate={(view) => {
-          setCurrentView(view);
-          setSelectedReportId(null);
-          if (view === 'map') {
-            setMapFocusReportId(null);
-            setMapCenter(null);
-          }
-          if (view === 'report' && step === 4) handleResetForm();
-=======
   const handleViewOnMap = (report: StoredReport) => {
     if (report.latitude && report.longitude) {
       setMapCenter([report.latitude, report.longitude]);
@@ -415,106 +318,10 @@ function AppContent() {
           if (v === 'report' && step === 4) {
             handleResetForm();
           }
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
         }}
         theme={theme}
         onToggleTheme={handleToggleTheme}
         reportCount={reportCount}
-<<<<<<< HEAD
-        unreadCount={unreadNotificationsCount}
-      />
-
-      {/* Community Map — full-bleed, flex-grows to fill remaining space after navbar */}
-      {currentView === 'map' && (
-        <div style={{ flex: 1, width: '100%', height: 'calc(100vh - 65px)', position: 'relative', overflow: 'hidden' }}>
-          <ErrorBoundary
-            fallbackTitle="Unable to load Community Map"
-            onReset={() => {
-              setMapFocusReportId(null);
-              setMapCenter(null);
-            }}
-          >
-            <CommunityMap
-              initialSelectedReportId={mapFocusReportId}
-              initialCenter={mapCenter}
-              onViewReport={(id) => {
-                setSelectedReportId(id);
-                setCurrentView('detail');
-              }}
-            />
-          </ErrorBoundary>
-        </div>
-      )}
-
-      {/* Main Container — report / community / tracker / detail views */}
-      <main
-        className="container"
-        style={{
-          marginTop: '1.5rem',
-          flex: 1,
-          display: currentView === 'map' ? 'none' : 'block',
-          paddingBottom: '2.5rem',
-          overflowY: 'auto',
-        }}
-      >
-        {/* Toast Notification */}
-        {toastMessage && (
-          <div
-            style={{
-              position: 'fixed',
-              bottom: '24px',
-              right: '24px',
-              zIndex: 2000,
-              backgroundColor: 'var(--bg-elevated)',
-              border: '1px solid var(--accent-amber)',
-              boxShadow: '0 4px 24px rgba(0, 0, 0, 0.45)',
-              borderRadius: 'var(--radius-md)',
-              padding: '0.8rem 1.35rem',
-              fontSize: '0.875rem',
-              fontWeight: 600,
-              color: 'var(--text-primary)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.55rem',
-              animation: 'slideUp 0.2s ease-out',
-            }}
-          >
-            <Sparkles size={16} color="var(--accent-amber)" />
-            <span>{toastMessage}</span>
-          </div>
-        )}
-
-        {/* View 1: Report Detail Lifecycle View */}
-        {currentView === 'detail' && selectedReportId ? (
-          <ReportDetailView
-            reportId={selectedReportId}
-            onBack={() => {
-              setSelectedReportId(null);
-              setCurrentView('community');
-            }}
-            onViewOnMap={handleViewOnMap}
-            onShowToast={showToast}
-          />
-        ) : currentView === 'community' ? (
-          /* View 2: Community Issues Feed & Upvotes */
-          <CommunityIssuesFeed
-            onSelectIssue={handleSelectReport}
-            onViewOnMap={handleViewOnMap}
-            onShowToast={showToast}
-          />
-        ) : currentView === 'tracker' ? (
-          /* View 3: Registry / My Activity & Updates View */
-          <ReportsTracker
-            onNewReport={handleResetForm}
-            onSelectReport={handleSelectReport}
-            onViewOnMap={handleViewOnMap}
-          />
-        ) : (
-          /* View 4: Issue Reporting Flow (Steps 1 to 4) */
-          <div>
-            {/* Step Wizard Progress Bar (Steps 1 to 3) */}
-            {step < 4 && (
-=======
         unreadNotificationsCount={unreadNotificationsCount}
       />
 
@@ -563,7 +370,6 @@ function AppContent() {
           >
             {/* Toast Notification */}
             {toastMessage && (
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
               <div
                 style={{
                   position: 'fixed',
@@ -798,11 +604,7 @@ function AppContent() {
         </>
       )}
 
-<<<<<<< HEAD
-      {/* Minimal Footer (hidden on full-screen map) */}
-=======
       {/* Minimal Footer */}
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
       {currentView !== 'map' && (
         <footer
           style={{
@@ -813,21 +615,12 @@ function AppContent() {
             color: 'var(--text-muted)',
           }}
         >
-<<<<<<< HEAD
-          <div style={{ maxWidth: '820px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
-            <div>
-              <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>Alcheminds</span> — Civic Technology Platform
-            </div>
-            <div className="mono">
-              Reporting · Community Upvotes · Lifecycle Tracking · Community Map
-=======
           <div style={{ maxWidth: '960px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
             <div>
               <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>Alcheminds Ecosystem</span> — Quad-Stakeholder Civic & Academic Innovation Platform
             </div>
             <div className="mono">
               Citizens · Municipal ULB · Universities (NEP 2020) · Industry (CSR Escrow)
->>>>>>> 24fe15c (added municipality,institution,government dashboards)
             </div>
           </div>
         </footer>
