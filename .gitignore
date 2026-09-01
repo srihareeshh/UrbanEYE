@@ -14,10 +14,11 @@ node_modules/
 dist/
 dist-ssr/
 
-# Local environment
+# Local environment & secrets
 *.local
 .env
 .env.*
+!.env.example
 
 # Editor directories and files
 .vscode/*
@@ -31,6 +32,8 @@ dist-ssr/
 *.sw?
 
 # SQLite database files
-server/alcheminds.db
-server/alcheminds.db-wal
-server/alcheminds.db-shm
+server/*.db
+server/*.db-wal
+server/*.db-shm
+server/*.db.corrupt_bak
+alcheminds.db*

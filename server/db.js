@@ -453,6 +453,52 @@ async function initSqliteFallback() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (project_id) REFERENCES hei_projects(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS report_ai_analysis (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      media_hash TEXT,
+      model_provider TEXT DEFAULT 'gemini',
+      model_name TEXT,
+      model_version TEXT,
+      analysis_version TEXT DEFAULT 'v1',
+      domain TEXT,
+      issue_type TEXT,
+      subtype TEXT,
+      severity INTEGER,
+      safety_risk INTEGER,
+      health_risk INTEGER,
+      urgency INTEGER,
+      recurrence TEXT,
+      evidence_confidence REAL,
+      recommended_radius_m INTEGER,
+      effective_radius_m INTEGER,
+      structured_output_json TEXT,
+      status TEXT DEFAULT 'pending',
+      attempt_count INTEGER DEFAULT 0,
+      queued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      started_at DATETIME,
+      completed_at DATETIME,
+      failed_at DATETIME,
+      error_message TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS report_priority_scores (
+      id TEXT PRIMARY KEY,
+      report_id TEXT NOT NULL,
+      score INTEGER NOT NULL,
+      bucket TEXT NOT NULL,
+      policy_version TEXT NOT NULL,
+      weights_json TEXT,
+      factor_scores_json TEXT,
+      radius_json TEXT,
+      override_json TEXT,
+      explanation_json TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE
+    );
   `);
 }
 
@@ -752,6 +798,50 @@ export async function initDatabase() {
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS report_ai_analysis (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+        media_hash TEXT,
+        model_provider VARCHAR(50) DEFAULT 'gemini',
+        model_name VARCHAR(100),
+        model_version VARCHAR(50),
+        analysis_version VARCHAR(50) DEFAULT 'v1',
+        domain VARCHAR(100),
+        issue_type VARCHAR(100),
+        subtype VARCHAR(100),
+        severity INTEGER,
+        safety_risk INTEGER,
+        health_risk INTEGER,
+        urgency INTEGER,
+        recurrence VARCHAR(50),
+        evidence_confidence DOUBLE PRECISION,
+        recommended_radius_m INTEGER,
+        effective_radius_m INTEGER,
+        structured_output_json JSONB,
+        status VARCHAR(50) DEFAULT 'pending',
+        attempt_count INTEGER DEFAULT 0,
+        queued_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ,
+        failed_at TIMESTAMPTZ,
+        error_message TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS report_priority_scores (
+        id TEXT PRIMARY KEY,
+        report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+        score INTEGER NOT NULL,
+        bucket VARCHAR(50) NOT NULL,
+        policy_version VARCHAR(50) NOT NULL,
+        weights_json JSONB,
+        factor_scores_json JSONB,
+        radius_json JSONB,
+        override_json JSONB,
+        explanation_json JSONB,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
       CREATE INDEX IF NOT EXISTS idx_reports_category ON reports(category);
       CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status);
@@ -767,6 +857,9 @@ export async function initDatabase() {
       CREATE INDEX IF NOT EXISTS idx_followers_report_id ON report_followers(report_id);
       CREATE INDEX IF NOT EXISTS idx_followers_user_id ON report_followers(user_id);
       CREATE INDEX IF NOT EXISTS idx_notifications_user ON user_notifications(user_id, is_read);
+      CREATE INDEX IF NOT EXISTS idx_ai_analysis_report_id ON report_ai_analysis(report_id);
+      CREATE INDEX IF NOT EXISTS idx_ai_analysis_status ON report_ai_analysis(status);
+      CREATE INDEX IF NOT EXISTS idx_priority_scores_report_id ON report_priority_scores(report_id);
     `);
 
     console.log('✓ [PostgreSQL + PostGIS] Running with pure live citizen reported data (0 sample data).');

@@ -149,6 +149,62 @@ export interface UserNotification {
 
 export type CommunitySortOption = 'nearby' | 'supported' | 'recent' | 'serious';
 
+export type PriorityBucket = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface PriorityFactors {
+  safety: number;
+  location: number;
+  severity: number;
+  report_volume: number;
+  vulnerable_population: number;
+  weather: number;
+  time_open: number;
+  urgency_evidence: number;
+}
+
+export interface PriorityBreakdown {
+  score: number;
+  bucket: PriorityBucket | string;
+  response_target?: string;
+  policy_version: string;
+  weights?: Record<string, number>;
+  factors: PriorityFactors;
+  radius?: {
+    base_radius_m: number;
+    ai_recommended_radius_m?: number | null;
+    effective_radius_m: number;
+    minimum_radius_m: number;
+    maximum_radius_m: number;
+  };
+  override?: {
+    enabled: boolean;
+    reason?: string;
+  } | null;
+  explanations: string[];
+}
+
+export interface AIAnalysis {
+  id?: string;
+  report_id?: string;
+  model_provider?: string;
+  model_name?: string;
+  analysis_version?: string;
+  domain?: string;
+  issue_type?: string;
+  subtype?: string;
+  severity?: number;
+  safety_risk?: number;
+  health_risk?: number;
+  urgency?: number;
+  recurrence?: string;
+  evidence_confidence?: number;
+  recommended_radius_m?: number;
+  effective_radius_m?: number;
+  structured_output?: any;
+  status: 'pending' | 'processing' | 'completed' | 'failed' | 'fallback';
+  created_at?: string;
+}
+
 export interface StoredReport {
   id: string;
   report_code: string;
@@ -162,6 +218,10 @@ export interface StoredReport {
   risk_description?: string | null;
   status: LifecycleStage | string;
   civic_priority_score: number;
+  priority_bucket?: PriorityBucket | string;
+  effective_radius_m?: number;
+  ai_analysis?: AIAnalysis | null;
+  priority_breakdown?: PriorityBreakdown | null;
   created_at: string;
   updated_at: string;
   latitude: number;

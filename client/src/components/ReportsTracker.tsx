@@ -623,10 +623,3 @@ export const ReportsTracker: React.FC<ReportsTrackerProps> = ({
     </div>
   );
 };
-
-export default defineConfig({
-  plugins: [react()],
-  build: {
-    chunkSizeWarningLimit: 1000,
-  },
-});

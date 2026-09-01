@@ -229,6 +229,55 @@ export const CommunityIssueCard: React.FC<CommunityIssueCardProps> = ({
           {/* Status Badge */}
           {getStatusBadge(issue.status)}
 
+          {/* Priority Bucket Badge */}
+          {issue.priority_bucket && (
+            <span
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                padding: '0.15rem 0.45rem',
+                borderRadius: '8px',
+                backgroundColor:
+                  issue.priority_bucket === 'CRITICAL'
+                    ? 'rgba(244, 63, 94, 0.2)'
+                    : issue.priority_bucket === 'HIGH'
+                    ? 'rgba(245, 158, 11, 0.2)'
+                    : 'rgba(56, 189, 248, 0.2)',
+                color:
+                  issue.priority_bucket === 'CRITICAL'
+                    ? '#f43f5e'
+                    : issue.priority_bucket === 'HIGH'
+                    ? '#f59e0b'
+                    : '#38bdf8',
+                border: `1px solid ${
+                  issue.priority_bucket === 'CRITICAL'
+                    ? 'rgba(244, 63, 94, 0.4)'
+                    : issue.priority_bucket === 'HIGH'
+                    ? 'rgba(245, 158, 11, 0.4)'
+                    : 'rgba(56, 189, 248, 0.4)'
+                }`,
+              }}
+            >
+              {issue.priority_bucket} ({issue.civic_priority_score})
+            </span>
+          )}
+
+          {/* Impact Radius */}
+          {issue.effective_radius_m && (
+            <span
+              style={{
+                fontSize: '0.68rem',
+                fontWeight: 600,
+                color: 'var(--accent-indigo)',
+                backgroundColor: 'rgba(99, 102, 241, 0.1)',
+                padding: '0.15rem 0.4rem',
+                borderRadius: '6px',
+              }}
+            >
+              ◎ {issue.effective_radius_m}m
+            </span>
+          )}
+
           {/* Severity Pill */}
           <span
             style={{

@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJsdoc from 'swagger-jsdoc';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -9,6 +11,13 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { db, initDatabase } from './db.js';
 import { clusterReportsByProximity, detectCivicHotspots, detectSystemicPatterns } from './hotspots.js';
+import { globalGeminiManager } from './ai/geminiRequestManager.js';
+import { AIJobPriority } from './ai/types.js';
+import { computeMediaHash } from './ai/mediaHasher.js';
+import { calculateDynamicPriority, PRIORITY_POLICY_VERSION, getPriorityBucket } from './priority/priorityEngine.js';
+import { calculateEffectiveRadius } from './geo/radiusPolicy.js';
+import { locationIntelligence } from './geo/locationIntelligence.js';
+import { weatherService } from './services/weatherService.js';
 
 // Setup environment and paths
 dotenv.config();
@@ -17,7 +26,36 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+// ==========================================
+// SWAGGER API DOCUMENTATION
+// ==========================================
 
+const swaggerOptions = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'UrbanEYE API',
+      version: '1.0.0',
+      description:
+        'API documentation for the UrbanEYE civic and societal problem-solving platform.'
+    },
+    servers: [
+      {
+        url: `http://localhost:${PORT}`,
+        description: 'Local Development Server'
+      }
+    ]
+  },
+  apis: ['./index.js']
+};
+
+const swaggerSpec = swaggerJsdoc(swaggerOptions);
+
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+app.get('/api-docs.json', (req, res) => {
+  res.json(swaggerSpec);
+});
 // Enable CORS and JSON body parser
 app.use(cors());
 app.use(express.json());
@@ -172,6 +210,133 @@ async function notifyReportFollowers(reportId, eventType, title, message, exclud
     console.warn('Failed to dispatch follower notifications:', e.message);
   }
 }
+
+// -------------------------------------------------------------
+// AI Analysis Completion & Priority Recalculation Listener
+// -------------------------------------------------------------
+export async function processReportAICompletion(reportId, aiResult, aiError) {
+  try {
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1`, [reportId]);
+    const report = reportRes.rows[0];
+    if (!report) return;
+
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [reportId]);
+    const location = locRes.rows[0] || {};
+    const mediaRes = await db.query(`SELECT * FROM report_media WHERE report_id = $1`, [reportId]);
+    const mediaList = mediaRes.rows;
+
+    const structured = aiResult?.structuredOutput;
+    const firstMedia = mediaList[0];
+    const mediaDiskPath = firstMedia?.file_path ? path.join(__dirname, firstMedia.file_path.replace(/^\//, '')) : null;
+    const mediaHash = computeMediaHash(mediaDiskPath);
+
+    const aiAnalysisId = `ai_${crypto.randomBytes(8).toString('hex')}`;
+    const radiusInfo = calculateEffectiveRadius(report.category, structured?.issue_type, structured?.recommended_radius_m);
+
+    if (aiResult && structured) {
+      await db.query(`
+        INSERT INTO report_ai_analysis (
+          id, report_id, media_hash, model_provider, model_name, model_version, analysis_version,
+          domain, issue_type, subtype, severity, safety_risk, health_risk, urgency, recurrence,
+          evidence_confidence, recommended_radius_m, effective_radius_m, structured_output_json, status,
+          completed_at, created_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
+        aiAnalysisId,
+        reportId,
+        mediaHash,
+        'gemini',
+        aiResult.model || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
+        '1.0',
+        process.env.AI_ANALYSIS_VERSION || 'v1',
+        structured.domain || report.category,
+        structured.issue_type || null,
+        structured.subtype || null,
+        structured.severity || null,
+        structured.safety_risk || null,
+        structured.health_risk || null,
+        structured.urgency || null,
+        structured.recurrence || report.recurrence || null,
+        structured.evidence_confidence || 0.85,
+        radiusInfo.ai_recommended_radius_m,
+        radiusInfo.effective_radius_m,
+        JSON.stringify(structured)
+      ]);
+    } else {
+      await db.query(`
+        INSERT INTO report_ai_analysis (
+          id, report_id, media_hash, model_provider, model_name, analysis_version, status,
+          error_message, failed_at, created_at
+        ) VALUES ($1, $2, $3, 'gemini', $4, $5, 'fallback', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
+        aiAnalysisId,
+        reportId,
+        mediaHash,
+        process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite',
+        process.env.AI_ANALYSIS_VERSION || 'v1',
+        aiError?.message || 'AI service fallback scoring applied'
+      ]);
+    }
+
+    // Fetch candidate reports for spatial clustering & volume assessment
+    const allReportsRes = await db.query(`
+      SELECT r.*, l.latitude, l.longitude FROM reports r
+      LEFT JOIN report_location l ON r.id = l.report_id
+      WHERE r.id != $1
+    `, [reportId]);
+
+    const dynamicPriority = await calculateDynamicPriority({
+      report: { ...report, photo_url: firstMedia?.file_path, media_count: mediaList.length },
+      location,
+      candidateReports: allReportsRes.rows,
+      aiAnalysis: structured
+    });
+
+    // Update Report Priority Score
+    await db.query(`
+      UPDATE reports SET civic_priority_score = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2
+    `, [dynamicPriority.score, reportId]);
+
+    // Save Historical Priority Snapshot
+    const priorityId = `pri_${crypto.randomBytes(8).toString('hex')}`;
+    await db.query(`
+      INSERT INTO report_priority_scores (
+        id, report_id, score, bucket, policy_version, weights_json, factor_scores_json,
+        radius_json, override_json, explanation_json, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+    `, [
+      priorityId,
+      reportId,
+      dynamicPriority.score,
+      dynamicPriority.bucket,
+      dynamicPriority.policy_version,
+      JSON.stringify(dynamicPriority.weights),
+      JSON.stringify(dynamicPriority.factors),
+      JSON.stringify(dynamicPriority.radius),
+      JSON.stringify(dynamicPriority.override),
+      JSON.stringify(dynamicPriority.explanations)
+    ]);
+
+    // Add Timeline Event for AI Analysis completion
+    const timelineTitle = aiResult ? `AI Civic Intelligence Analysis Completed` : `Deterministic Priority Score Computed (Fallback)`;
+    const timelineDesc = `Priority Score: ${dynamicPriority.score}/100 (${dynamicPriority.bucket}). Impact Radius: ${dynamicPriority.radius.effective_radius_m}m. Primary Factors: ${dynamicPriority.explanations.slice(0, 2).join('; ')}`;
+
+    await db.query(`
+      INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
+      VALUES ($1, $2, $3, 'system', 'Civic AI Engine', $4, $5, CURRENT_TIMESTAMP)
+    `, [
+      `tml_${crypto.randomBytes(6).toString('hex')}`,
+      reportId,
+      report.status || 'Submitted',
+      timelineTitle,
+      timelineDesc
+    ]);
+  } catch (err) {
+    console.error('⚠️ processReportAICompletion error:', err.message);
+  }
+}
+
+globalGeminiManager.onJobCompleted(processReportAICompletion);
 
 // ==========================================
 // 1. HEALTH CHECK & DATABASE STATUS
@@ -474,7 +639,7 @@ app.post('/api/reports', upload.any(), async (req, res) => {
 
       // 5. Media & Metadata
       for (const item of parsedMedia) {
-        const mediaId = item.mediaId || item.id || `med_${crypto.randomBytes(8).toString('hex')}`;
+        const mediaId = `med_${crypto.randomBytes(8).toString('hex')}`;
         await client.query(`
           INSERT INTO report_media (
             id, report_id, media_type, original_name, file_name, file_path, mime_type, file_size, duration_seconds, created_at
@@ -524,6 +689,42 @@ app.post('/api/reports', upload.any(), async (req, res) => {
     const detailsRes = await db.query(`SELECT * FROM issue_details WHERE report_id = $1`, [reportId]);
     const timelineRes = await db.query(`SELECT * FROM report_timeline WHERE report_id = $1 ORDER BY created_at ASC`, [reportId]);
 
+    // Asynchronously enqueue AI Civic Intelligence Analysis (never blocks report response)
+    let aiJobPriority = AIJobPriority.NORMAL;
+    if (safeIsRiskPresent || severity === 'Dangerous') {
+      aiJobPriority = AIJobPriority.CRITICAL;
+    } else if (severity === 'Serious') {
+      aiJobPriority = AIJobPriority.HIGH;
+    }
+
+    const firstMedia = mediaRes.rows[0];
+    const mediaDiskPath = firstMedia ? path.join(__dirname, firstMedia.file_path.replace(/^\//, '')) : null;
+
+    globalGeminiManager.enqueueAnalysis({
+      report: {
+        id: reportId,
+        report_code: reportCode,
+        category: safeCategory,
+        description: description || '',
+        duration: duration || '',
+        recurrence: recurrence || '',
+        severity: severity || 'Moderate',
+        isRiskPresent: safeIsRiskPresent,
+        riskDescription: safeRiskDesc,
+        created_at: new Date().toISOString()
+      },
+      location: {
+        latitude: safeLat,
+        longitude: safeLng,
+        city: safeCity
+      },
+      mediaPath: mediaDiskPath,
+      mimeType: firstMedia?.mime_type,
+      priority: aiJobPriority
+    }).catch(aiEnqueueErr => {
+      console.warn('⚠️ Asynchronous AI queueing notice:', aiEnqueueErr.message);
+    });
+
     res.status(201).json({
       success: true,
       report: {
@@ -531,7 +732,9 @@ app.post('/api/reports', upload.any(), async (req, res) => {
         location: locRes.rows[0] || null,
         media: mediaRes.rows,
         issueDetails: detailsRes.rows[0] || null,
-        timeline: timelineRes.rows
+        timeline: timelineRes.rows,
+        civic_priority_score: priorityScore,
+        priority_bucket: getPriorityBucket(priorityScore).bucket
       }
     });
   } catch (error) {
@@ -568,19 +771,26 @@ app.get('/api/reports', async (req, res) => {
     const challengesList = challengesListRes.rows;
     const projectsList = projectsListRes.rows;
 
-    const enriched = reports.map(r => ({
-      ...r,
-      media: mediaList.filter(m => m.report_id === r.id),
-      assignment: assignmentsList.find(a => a.report_id === r.id) || null,
-      resolution: resolutionsList.find(res => res.report_id === r.id) || null,
-      hei_challenge: challengesList.find(c => c.report_id === r.id) || null,
-      hei_project: projectsList.find(p => p.report_id === r.id) || null,
-      is_escalated_to_hei: !!challengesList.find(c => c.report_id === r.id),
-      metadata: metadataList.filter(m => m.report_id === r.id).map(m => ({
-        ...m,
-        exif: parseJsonSafe(m.exif_json)
-      }))
-    }));
+    const enriched = reports.map(r => {
+      const bucketInfo = getPriorityBucket(r.civic_priority_score || 30);
+      const radiusInfo = calculateEffectiveRadius(r.category);
+
+      return {
+        ...r,
+        priority_bucket: bucketInfo.bucket,
+        effective_radius_m: radiusInfo.effective_radius_m,
+        media: mediaList.filter(m => m.report_id === r.id),
+        assignment: assignmentsList.find(a => a.report_id === r.id) || null,
+        resolution: resolutionsList.find(res => res.report_id === r.id) || null,
+        hei_challenge: challengesList.find(c => c.report_id === r.id) || null,
+        hei_project: projectsList.find(p => p.report_id === r.id) || null,
+        is_escalated_to_hei: !!challengesList.find(c => c.report_id === r.id),
+        metadata: metadataList.filter(m => m.report_id === r.id).map(m => ({
+          ...m,
+          exif: parseJsonSafe(m.exif_json)
+        }))
+      };
+    });
 
     res.json({
       success: true,
@@ -643,6 +853,41 @@ app.get('/api/reports/:id', async (req, res) => {
       isFollowed = folCheck.rows.length > 0;
     }
 
+    // Fetch latest AI analysis & priority breakdown
+    const aiRes = await db.query(`SELECT * FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const priorityRes = await db.query(`SELECT * FROM report_priority_scores WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+
+    const latestAi = aiRes.rows[0] || null;
+    const latestPriority = priorityRes.rows[0] || null;
+
+    let priorityData = null;
+    if (latestPriority) {
+      priorityData = {
+        score: latestPriority.score,
+        bucket: latestPriority.bucket,
+        policy_version: latestPriority.policy_version,
+        weights: parseJsonSafe(latestPriority.weights_json, {}),
+        factors: parseJsonSafe(latestPriority.factor_scores_json, {}),
+        radius: parseJsonSafe(latestPriority.radius_json, {}),
+        override: parseJsonSafe(latestPriority.override_json, null),
+        explanations: parseJsonSafe(latestPriority.explanation_json, [])
+      };
+    } else {
+      // Fast fallback calculation
+      const fallbackBucket = getPriorityBucket(report.civic_priority_score || 30);
+      const fallbackRadius = calculateEffectiveRadius(report.category);
+      priorityData = {
+        score: report.civic_priority_score || 30,
+        bucket: fallbackBucket.bucket,
+        policy_version: PRIORITY_POLICY_VERSION,
+        weights: {},
+        factors: { safety: 50, location: 40, severity: 50, report_volume: 30, vulnerable_population: 30, weather: 30, time_open: 20, urgency_evidence: 40 },
+        radius: fallbackRadius,
+        override: null,
+        explanations: ['Initial baseline priority']
+      };
+    }
+
     res.json({
       success: true,
       report: {
@@ -665,6 +910,13 @@ app.get('/api/reports/:id', async (req, res) => {
           sdg_goals: parseJsonSafe(projectRes.rows[0].sdg_goals_json, []),
           milestones
         } : null,
+        ai_analysis: latestAi ? {
+          ...latestAi,
+          structured_output: parseJsonSafe(latestAi.structured_output_json, null)
+        } : null,
+        priority_breakdown: priorityData,
+        priority_bucket: priorityData.bucket,
+        effective_radius_m: priorityData.radius?.effective_radius_m || 150,
         verifications: verifRes.rows.map(v => ({
           ...v,
           followUpMedia: parseJsonSafe(v.follow_up_media_json, [])
@@ -678,6 +930,286 @@ app.get('/api/reports/:id', async (req, res) => {
   } catch (err) {
     console.error('Fetch single report error:', err);
     res.status(500).json({ error: 'Failed to fetch report details.' });
+  }
+});
+
+// ==========================================
+// 5A. AI CIVIC INTELLIGENCE HEALTH & METRICS
+// ==========================================
+app.get('/api/health/ai', (req, res) => {
+  try {
+    const metrics = globalGeminiManager.getMetrics();
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      ...metrics
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve AI health metrics.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5B. TRIGGER / RE-RUN AI REPORT ANALYSIS
+// ==========================================
+app.post('/api/reports/:id/analyze', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [report.id]);
+    const mediaRes = await db.query(`SELECT * FROM report_media WHERE report_id = $1`, [report.id]);
+
+    const firstMedia = mediaRes.rows[0];
+    const mediaDiskPath = firstMedia ? path.join(__dirname, firstMedia.file_path.replace(/^\//, '')) : null;
+
+    let priority = AIJobPriority.NORMAL;
+    if (report.is_risk_present || report.severity === 'Dangerous') priority = AIJobPriority.CRITICAL;
+    else if (report.severity === 'Serious') priority = AIJobPriority.HIGH;
+
+    const enqueueRes = await globalGeminiManager.enqueueAnalysis({
+      report: {
+        id: report.id,
+        report_code: report.report_code,
+        category: report.category,
+        description: report.description,
+        duration: report.duration,
+        recurrence: report.recurrence,
+        severity: report.severity,
+        isRiskPresent: report.is_risk_present,
+        riskDescription: report.risk_description,
+        created_at: report.created_at
+      },
+      location: locRes.rows[0] || {},
+      mediaPath: mediaDiskPath,
+      mimeType: firstMedia?.mime_type,
+      priority
+    });
+
+    res.json({
+      success: true,
+      message: 'AI analysis job queued successfully.',
+      status: enqueueRes.status,
+      queue_depth: enqueueRes.queueDepth
+    });
+  } catch (err) {
+    console.error('Trigger AI analysis error:', err);
+    res.status(500).json({ error: 'Failed to enqueue AI analysis.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5C. GET LATEST AI ANALYSIS FOR REPORT
+// ==========================================
+app.get('/api/reports/:id/ai-analysis', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reportRes = await db.query(`SELECT id FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const aiRes = await db.query(`SELECT * FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const row = aiRes.rows[0];
+
+    if (!row) {
+      return res.json({
+        success: true,
+        status: 'pending',
+        message: 'AI analysis is currently queued or in-progress.'
+      });
+    }
+
+    res.json({
+      success: true,
+      analysis: {
+        ...row,
+        structured_output: parseJsonSafe(row.structured_output_json)
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch AI analysis.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5D. GET DYNAMIC PRIORITY BREAKDOWN
+// ==========================================
+app.get('/api/reports/:id/priority', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [report.id]);
+    const mediaRes = await db.query(`SELECT * FROM report_media WHERE report_id = $1`, [report.id]);
+    const aiRes = await db.query(`SELECT * FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const structured = parseJsonSafe(aiRes.rows[0]?.structured_output_json, null);
+
+    const allReportsRes = await db.query(`
+      SELECT r.*, l.latitude, l.longitude FROM reports r
+      LEFT JOIN report_location l ON r.id = l.report_id
+      WHERE r.id != $1
+    `, [report.id]);
+
+    const dynamicPriority = await calculateDynamicPriority({
+      report: { ...report, photo_url: mediaRes.rows[0]?.file_path, media_count: mediaRes.rows.length },
+      location: locRes.rows[0] || {},
+      candidateReports: allReportsRes.rows,
+      aiAnalysis: structured
+    });
+
+    res.json({
+      success: true,
+      priority: {
+        score: dynamicPriority.score,
+        bucket: dynamicPriority.bucket,
+        response_target: dynamicPriority.response_target
+      },
+      radius: dynamicPriority.radius,
+      factors: dynamicPriority.factors,
+      weights: dynamicPriority.weights,
+      domain_profile: dynamicPriority.domain_profile,
+      policy_version: dynamicPriority.policy_version,
+      cluster: dynamicPriority.cluster,
+      location_intelligence: dynamicPriority.location_intelligence,
+      weather: dynamicPriority.weather,
+      explanations: dynamicPriority.explanations
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to calculate report priority.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5E. GET PRIORITY EXPLANATION
+// ==========================================
+app.get('/api/reports/:id/priority-explanation', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const priorityRes = await db.query(`SELECT * FROM report_priority_scores WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const latest = priorityRes.rows[0];
+
+    if (latest && latest.explanation_json) {
+      return res.json({
+        success: true,
+        score: latest.score,
+        bucket: latest.bucket,
+        explanations: parseJsonSafe(latest.explanation_json, []),
+        factors: parseJsonSafe(latest.factor_scores_json, {})
+      });
+    }
+
+    // Dynamic fallback
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [report.id]);
+    const dynamicPriority = await calculateDynamicPriority({
+      report,
+      location: locRes.rows[0] || {},
+      candidateReports: []
+    });
+
+    res.json({
+      success: true,
+      score: dynamicPriority.score,
+      bucket: dynamicPriority.bucket,
+      explanations: dynamicPriority.explanations,
+      factors: dynamicPriority.factors
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to retrieve score explanation.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5F. REGULATORY / MUNICIPAL PRIORITY OVERRIDE
+// ==========================================
+app.post('/api/reports/:id/override', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      override_enabled = true,
+      override_type = 'vip_route',
+      override_reason = 'Designated emergency transit route',
+      override_priority_floor = 85,
+      officer_name = 'Municipal Commissioner'
+    } = req.body;
+
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const locRes = await db.query(`SELECT * FROM report_location WHERE report_id = $1`, [report.id]);
+    const aiRes = await db.query(`SELECT * FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const structured = parseJsonSafe(aiRes.rows[0]?.structured_output_json, null);
+
+    const overrideObj = {
+      override_enabled: Boolean(override_enabled),
+      override_type,
+      override_reason,
+      override_priority_floor: Number(override_priority_floor),
+      authorized_by: officer_name,
+      timestamp: new Date().toISOString()
+    };
+
+    const dynamicPriority = await calculateDynamicPriority({
+      report,
+      location: locRes.rows[0] || {},
+      candidateReports: [],
+      aiAnalysis: structured,
+      override: overrideObj
+    });
+
+    // Update Report Score
+    await db.query(`UPDATE reports SET civic_priority_score = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, [dynamicPriority.score, report.id]);
+
+    // Save Historical Priority Snapshot
+    const priorityId = `pri_${crypto.randomBytes(8).toString('hex')}`;
+    await db.query(`
+      INSERT INTO report_priority_scores (
+        id, report_id, score, bucket, policy_version, weights_json, factor_scores_json,
+        radius_json, override_json, explanation_json, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+    `, [
+      priorityId,
+      report.id,
+      dynamicPriority.score,
+      dynamicPriority.bucket,
+      dynamicPriority.policy_version,
+      JSON.stringify(dynamicPriority.weights),
+      JSON.stringify(dynamicPriority.factors),
+      JSON.stringify(dynamicPriority.radius),
+      JSON.stringify(overrideObj),
+      JSON.stringify(dynamicPriority.explanations)
+    ]);
+
+    // Add Timeline Event for Auditability
+    await db.query(`
+      INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
+      VALUES ($1, $2, $3, 'authority', $4, 'Regulatory Priority Override Applied', $5, CURRENT_TIMESTAMP)
+    `, [
+      `tml_${crypto.randomBytes(6).toString('hex')}`,
+      report.id,
+      report.status || 'Submitted',
+      officer_name,
+      `Priority floor elevated to ${override_priority_floor}/100. Reason: ${override_reason}`
+    ]);
+
+    res.json({
+      success: true,
+      message: 'Priority override successfully applied.',
+      new_priority_score: dynamicPriority.score,
+      priority_bucket: dynamicPriority.bucket,
+      override: overrideObj
+    });
+  } catch (err) {
+    console.error('Priority override error:', err);
+    res.status(500).json({ error: 'Failed to apply priority override.', details: err.message });
   }
 });
 
@@ -1079,8 +1611,13 @@ app.get('/api/community/issues', async (req, res) => {
       else if (r.severity === 'Moderate') severityWeight = 2;
       else if (r.severity === 'Low') severityWeight = 1;
 
+      const bucketInfo = getPriorityBucket(r.civic_priority_score || 30);
+      const radiusInfo = calculateEffectiveRadius(r.category);
+
       return {
         ...r,
+        priority_bucket: bucketInfo.bucket,
+        effective_radius_m: radiusInfo.effective_radius_m,
         upvote_count: parseInt(r.upvote_count || '0', 10),
         follower_count: parseInt(r.follower_count || '0', 10),
         distance_km: distance,
@@ -1417,10 +1954,16 @@ async function getEnrichedMapReports(filters = {}) {
     query += ` AND l.latitude BETWEEN $${p1} AND $${p2} AND l.longitude BETWEEN $${p3} AND $${p4}`;
   }
 
-  query += ` ORDER BY r.created_at DESC`;
-
   const res = await db.query(query, params);
-  return res.rows;
+  return res.rows.map(r => {
+    const bucketInfo = getPriorityBucket(r.civic_priority_score || 30);
+    const radiusInfo = calculateEffectiveRadius(r.category);
+    return {
+      ...r,
+      priority_bucket: bucketInfo.bucket,
+      effective_radius_m: radiusInfo.effective_radius_m
+    };
+  });
 }
 
 app.get('/api/map/reports', async (req, res) => {
