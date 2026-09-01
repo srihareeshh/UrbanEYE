@@ -55,13 +55,13 @@ const ROLES: Array<{
   },
   {
     id: 'municipal',
-    label: 'Municipal Corporation',
-    shortLabel: 'Municipal ULB',
-    badge: 'Govt / ULB',
+    label: 'Government & Municipal ULB',
+    shortLabel: 'Government / ULB',
+    badge: 'Government Command',
     icon: Building2,
     color: 'var(--accent-amber)',
     glow: 'rgba(245, 158, 11, 0.15)',
-    description: 'Triage, SLA dispatching, GIS hotspots, HEI escalation & dual-signoff',
+    description: 'Problem review, AI advisory capability matching, work orders, HEI innovation track & pilot monitoring',
   },
   {
     id: 'institution',

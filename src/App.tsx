@@ -21,7 +21,7 @@ import { CommunityIssuesFeed } from './components/CommunityIssuesFeed';
 import { CommunityMap } from './components/CommunityMap';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { GlobalProvider, useGlobalStore } from './store/globalStore';
-import { MunicipalDashboard } from './components/municipal/MunicipalDashboard';
+import { GovernmentDashboard } from './components/government/GovernmentDashboard';
 import { InstitutionDashboard } from './components/institution/InstitutionDashboard';
 import { IndustryDashboard } from './components/industry/IndustryDashboard';
 import type {
@@ -328,7 +328,7 @@ function AppContent() {
       {/* RENDER STAKEHOLDER VIEWS */}
       {currentRole === 'municipal' ? (
         <main className="container" style={{ marginTop: '1.5rem', flex: 1, paddingBottom: '2.5rem', overflowY: 'auto' }}>
-          <MunicipalDashboard />
+          <GovernmentDashboard />
         </main>
       ) : currentRole === 'institution' ? (
         <main className="container" style={{ marginTop: '1.5rem', flex: 1, paddingBottom: '2.5rem', overflowY: 'auto' }}>
