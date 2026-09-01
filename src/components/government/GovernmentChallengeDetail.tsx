@@ -439,7 +439,7 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
                           </label>
                           <select
                             className="input"
-                            style={{ width: '100%', height: '36px', fontSize: '0.8125rem', marginTop: '0.2rem' }}
+                            style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
                             value={selectedDept}
                             onChange={(e) => handleDeptChange(e.target.value)}
                           >
@@ -459,7 +459,7 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
                             <input
                               type="text"
                               className="input"
-                              style={{ width: '100%', height: '36px', fontSize: '0.8125rem', marginTop: '0.2rem' }}
+                              style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
                               value={selectedOfficer}
                               onChange={(e) => setSelectedOfficer(e.target.value)}
                             />
@@ -471,14 +471,14 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
                             </label>
                             <select
                               className="input"
-                              style={{ width: '100%', height: '36px', fontSize: '0.8125rem', marginTop: '0.2rem' }}
+                              style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
                               value={targetHours}
                               onChange={(e) => setTargetHours(Number(e.target.value))}
                             >
-                              <option value={12}>12 Hours (Emergency / Safety)</option>
-                              <option value={24}>24 Hours (Urgent)</option>
-                              <option value={48}>48 Hours (Standard)</option>
-                              <option value={72}>72 Hours (Routine)</option>
+                              <option value={12}>12 Hours (Emergency Critical)</option>
+                              <option value={24}>24 Hours (High Priority)</option>
+                              <option value={48}>48 Hours (Standard ULB SLA)</option>
+                              <option value={72}>72 Hours (Routine Maintenance)</option>
                             </select>
                           </div>
                         </div>
@@ -529,7 +529,7 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
                         <input
                           type="text"
                           className="input"
-                          style={{ width: '100%', height: '34px', fontSize: '0.78125rem' }}
+                          style={{ width: '100%', height: '40px', fontSize: '0.78125rem', borderRadius: 'var(--radius-md)' }}
                           placeholder="Resolved by (e.g., Duty Field Crew)..."
                           value={resolvedBy}
                           onChange={(e) => setResolvedBy(e.target.value)}

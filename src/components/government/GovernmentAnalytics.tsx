@@ -77,7 +77,7 @@ export const GovernmentAnalytics: React.FC<GovernmentAnalyticsProps> = ({
             className="input"
             value={selectedDistrict}
             onChange={(e) => setSelectedDistrict(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem', minWidth: '180px' }}
+            style={{ height: '40px', fontSize: '0.8125rem', minWidth: '190px', borderRadius: 'var(--radius-md)' }}
           >
             {JHARKHAND_DISTRICTS.map((d) => (
               <option key={d} value={d}>

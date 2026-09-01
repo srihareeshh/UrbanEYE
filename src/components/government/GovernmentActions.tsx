@@ -128,16 +128,16 @@ export const GovernmentActions: React.FC<GovernmentActionsProps> = ({
         </div>
 
         {/* Filters */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.65rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
           <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '11px', color: 'var(--text-muted)' }} />
+            <Search size={15} style={{ position: 'absolute', left: '10px', top: '13px', color: 'var(--text-muted)' }} />
             <input
               type="text"
               placeholder="Search officer, work order, dept..."
               className="input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ paddingLeft: '32px', height: '36px', fontSize: '0.8125rem', width: '100%' }}
+              style={{ paddingLeft: '32px', height: '40px', fontSize: '0.8125rem', width: '100%', borderRadius: 'var(--radius-md)' }}
             />
           </div>
 
@@ -145,7 +145,7 @@ export const GovernmentActions: React.FC<GovernmentActionsProps> = ({
             className="input"
             value={filterDept}
             onChange={(e) => setFilterDept(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Assigned Departments</option>
             {departments.map((d) => (
@@ -159,7 +159,7 @@ export const GovernmentActions: React.FC<GovernmentActionsProps> = ({
             className="input"
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Action Stages</option>
             <option value="in_progress">In Progress / Dispatched</option>

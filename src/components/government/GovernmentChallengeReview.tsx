@@ -144,17 +144,17 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
         </div>
 
         {/* Multi-Dimensional Filter Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.65rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem' }}>
           {/* 1. Search Box */}
           <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '11px', color: 'var(--text-muted)' }} />
+            <Search size={15} style={{ position: 'absolute', left: '10px', top: '13px', color: 'var(--text-muted)' }} />
             <input
               type="text"
               placeholder="Search code, keyword, area..."
               className="input"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ paddingLeft: '32px', height: '36px', fontSize: '0.8125rem', width: '100%' }}
+              style={{ paddingLeft: '32px', height: '40px', fontSize: '0.8125rem', width: '100%', borderRadius: 'var(--radius-md)' }}
             />
           </div>
 
@@ -163,7 +163,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={districtFilter}
             onChange={(e) => setDistrictFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             {JHARKHAND_DISTRICTS.map((d) => (
               <option key={d} value={d}>
@@ -177,7 +177,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={domainFilter}
             onChange={(e) => setDomainFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Domains (Categories)</option>
             {domains.map((dom) => (
@@ -192,7 +192,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Lifecycle Statuses</option>
             <option value="pending">Pending Triage / Under Review</option>
@@ -206,7 +206,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={severityFilter}
             onChange={(e) => setSeverityFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Severity Levels</option>
             <option value="critical">Critical / Dangerous</option>
@@ -220,7 +220,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={govActionFilter}
             onChange={(e) => setGovActionFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Gov Action Stages</option>
             <option value="action_needed">Action Required</option>
@@ -233,7 +233,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={urgencyFilter}
             onChange={(e) => setUrgencyFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Urgency Levels</option>
             <option value="immediate">Immediate Attention Needed</option>
@@ -244,7 +244,7 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
             className="input"
             value={innovationFilter}
             onChange={(e) => setInnovationFilter(e.target.value)}
-            style={{ height: '36px', fontSize: '0.8125rem' }}
+            style={{ height: '40px', fontSize: '0.8125rem', borderRadius: 'var(--radius-md)' }}
           >
             <option value="all">All Innovation Pathways</option>
             <option value="candidate">Innovation Candidates (Recurrent/Structural)</option>

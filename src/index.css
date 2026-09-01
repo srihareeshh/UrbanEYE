@@ -261,20 +261,46 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* Custom Form Inputs */
-.input, .textarea, .select {
+.input, .textarea, .select, select, input[type="text"], input[type="search"], input[type="number"] {
   width: 100%;
   font-family: var(--font-sans);
-  font-size: 0.9375rem;
+  font-size: 0.84375rem;
   color: var(--text-primary);
   background-color: var(--bg-input);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  padding: 0.85rem 1rem;
+  padding: 0.5rem 0.85rem;
   outline: none;
   transition: all 0.2s ease;
+  box-sizing: border-box;
+  line-height: normal;
+  display: inline-flex;
+  align-items: center;
 }
 
-.input:focus, .textarea:focus, .select:focus {
+select, select.input, .select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2.25rem !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 14px 14px;
+  cursor: pointer;
+}
+
+[data-theme='light'] select, [data-theme='light'] select.input, [data-theme='light'] .input {
+  background-color: #ffffff;
+  border-color: rgba(0, 0, 0, 0.14);
+  color: #0f172a;
+}
+
+[data-theme='light'] select, [data-theme='light'] select.input {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+.input:focus, .textarea:focus, .select:focus, select:focus {
   border-color: var(--border-focus);
   box-shadow: 0 0 0 3px var(--accent-amber-glow);
 }
@@ -282,6 +308,7 @@ h1, h2, h3, h4, h5, h6 {
 .textarea {
   resize: vertical;
   min-height: 110px;
+  padding: 0.75rem 1rem;
 }
 
 /* Leaflet Map Custom Container */
