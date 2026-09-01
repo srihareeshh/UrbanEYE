@@ -40,21 +40,7 @@ const CATEGORY_META: Record<string, { icon: React.ReactNode; color: string; bg: 
   Other: { icon: <HelpCircle size={13} />, color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.12)' },
 };
 
-function formatTimeAgo(dateStr: string): string {
-  if (!dateStr) return '';
-  const now = Date.now();
-  const then = new Date(dateStr).getTime();
-  const diffMs = now - then;
-  const mins = Math.floor(diffMs / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days === 1) return 'Yesterday';
-  if (days < 30) return `${days}d ago`;
-  return new Date(dateStr).toLocaleDateString();
-}
+import { formatRelativeTimeIST, formatISTDateTime } from '../utils/dateHelper';
 
 function getStatusBadge(status: string) {
   switch (status) {
@@ -306,9 +292,10 @@ export const CommunityIssueCard: React.FC<CommunityIssueCardProps> = ({
             fontSize: '0.72rem',
             color: 'var(--text-muted)',
           }}
+          title={formatISTDateTime(issue.created_at)}
         >
           <Clock size={11} />
-          <span>{formatTimeAgo(issue.created_at)}</span>
+          <span>{formatRelativeTimeIST(issue.created_at)}</span>
         </div>
       </div>
 

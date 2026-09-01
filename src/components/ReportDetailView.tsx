@@ -19,9 +19,13 @@ import { BeforeAfterViewer } from './BeforeAfterViewer';
 import { CitizenVerification } from './CitizenVerification';
 import { AuthoritySimulator } from './AuthoritySimulator';
 import { HEIInnovationTrack } from './HEIInnovationTrack';
+import { SeverityExplanation } from './SeverityExplanation';
+import { PriorityScoreExplanation } from './PriorityScoreExplanation';
+import { PriorityFactorList } from './PriorityFactorList';
 import type { StoredReport, VerificationInfo } from '../types';
 import { formatBytes } from '../utils/exifHelper';
 import { apiFetch } from '../utils/userSession';
+import { formatISTDateTime } from '../utils/dateHelper';
 
 interface ReportDetailViewProps {
   reportId: string;
@@ -280,7 +284,7 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
               )}
             </div>
             <div style={{ fontSize: '0.78125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-              Reported on {new Date(report.created_at).toLocaleString()} by Citizen Reporter
+              Reported on {formatISTDateTime(report.created_at)} by Citizen Reporter
             </div>
           </div>
         </div>
@@ -497,149 +501,43 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
             </div>
           </div>
         )}
+
+        {/* Severity Classification & "Why this severity?" Explanations */}
+        <SeverityExplanation
+          severity={report.priority_breakdown?.severity_level || report.severity || 'Moderate'}
+          category={report.category}
+          reasons={report.priority_breakdown?.severity_explanation}
+          isAiAssessed={report.ai_analysis?.status === 'completed'}
+        />
       </div>
 
-      {/* 6.5 AI Civic Intelligence & Deterministic Priority Panel */}
-      <div className="card" style={{ border: '1px solid rgba(245, 158, 11, 0.25)', backgroundColor: 'rgba(15, 23, 42, 0.75)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Sparkles size={18} color="var(--accent-amber)" />
-            <span style={{ fontWeight: 800, fontSize: '1rem' }}>Civic Priority & AI Intelligence Engine</span>
+      {/* 6.5 AI Civic Intelligence & Explainable Priority Engine */}
+      {report.ai_analysis && (report.ai_analysis.status === 'pending' || report.ai_analysis.status === 'processing') ? (
+        <div className="card" style={{ textAlign: 'center', padding: '2rem', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, color: 'var(--accent-amber)' }}>
+            <Sparkles size={18} className="animate-spin" />
+            <span>Analyzing severity and civic impact...</span>
           </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-            {report.priority_bucket && (
-              <span
-                style={{
-                  fontWeight: 800,
-                  fontSize: '0.75rem',
-                  padding: '0.2rem 0.65rem',
-                  borderRadius: '12px',
-                  backgroundColor:
-                    report.priority_bucket === 'CRITICAL'
-                      ? 'rgba(244, 63, 94, 0.2)'
-                      : report.priority_bucket === 'HIGH'
-                      ? 'rgba(245, 158, 11, 0.2)'
-                      : 'rgba(56, 189, 248, 0.2)',
-                  color:
-                    report.priority_bucket === 'CRITICAL'
-                      ? '#f43f5e'
-                      : report.priority_bucket === 'HIGH'
-                      ? '#f59e0b'
-                      : '#38bdf8',
-                  border: `1px solid ${
-                    report.priority_bucket === 'CRITICAL'
-                      ? 'rgba(244, 63, 94, 0.4)'
-                      : report.priority_bucket === 'HIGH'
-                      ? 'rgba(245, 158, 11, 0.4)'
-                      : 'rgba(56, 189, 248, 0.4)'
-                  }`,
-                }}
-              >
-                BUCKET: {report.priority_bucket}
-              </span>
-            )}
-
-            {report.effective_radius_m && (
-              <span
-                style={{
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  padding: '0.2rem 0.6rem',
-                  borderRadius: '12px',
-                  backgroundColor: 'rgba(99, 102, 241, 0.15)',
-                  color: 'var(--accent-indigo)',
-                  border: '1px solid rgba(99, 102, 241, 0.3)',
-                }}
-              >
-                Impact Radius: {report.effective_radius_m}m
-              </span>
-            )}
-
-            {report.ai_analysis && (
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 600,
-                  padding: '0.15rem 0.5rem',
-                  borderRadius: '10px',
-                  backgroundColor: report.ai_analysis.status === 'completed' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(148, 163, 184, 0.15)',
-                  color: report.ai_analysis.status === 'completed' ? '#10b981' : 'var(--text-muted)',
-                }}
-              >
-                AI: {report.ai_analysis.status.toUpperCase()} ({report.ai_analysis.model_name || 'Gemini'})
-              </span>
-            )}
+          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '0.4rem' }}>
+            Multi-factor priority assessment and location sensitivity indexing will appear shortly.
           </div>
         </div>
+      ) : report.priority_breakdown ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <PriorityScoreExplanation
+            priority={report.priority_breakdown}
+            aiStatus={report.ai_analysis?.status}
+            category={report.category}
+          />
 
-        {/* Priority Score Summary */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.85rem', marginBottom: '1.25rem' }}>
-          <div style={{ backgroundColor: 'var(--bg-card)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', textAlign: 'center' }}>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Composite Civic Priority</div>
-            <div className="mono" style={{ fontSize: '2.2rem', fontWeight: 900, color: 'var(--accent-amber)', margin: '0.25rem 0' }}>
-              {report.civic_priority_score} <span style={{ fontSize: '1rem', color: 'var(--text-muted)' }}>/ 100</span>
-            </div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-              Deterministic Policy: {report.priority_breakdown?.policy_version || 'v1.0'}
-            </div>
-          </div>
-
-          {/* Key Explanations */}
-          <div style={{ backgroundColor: 'var(--bg-card)', padding: '0.9rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
-              Primary Priority Drivers & Policy Explanations:
-            </div>
-            <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.78125rem', color: 'var(--text-primary)', lineHeight: 1.6 }}>
-              {(report.priority_breakdown?.explanations || ['Routine municipal maintenance priority scheduled']).map((exp, idx) => (
-                <li key={idx}>{exp}</li>
-              ))}
-            </ul>
-          </div>
+          <PriorityFactorList
+            factors={report.priority_breakdown.factors}
+            contributingFactors={report.priority_breakdown.contributing_factors}
+            weights={report.priority_breakdown.weights}
+            baseScore={report.priority_breakdown.base_score}
+          />
         </div>
-
-        {/* 8-Factor Score Breakdown Progress Bars */}
-        {report.priority_breakdown?.factors && (
-          <div style={{ backgroundColor: 'var(--bg-card)', padding: '0.9rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '0.75rem' }}>
-              8-Factor Deterministic Priority Breakdown:
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
-              {[
-                { label: 'Safety / Hazard Potential', val: report.priority_breakdown.factors.safety, weight: '20%' },
-                { label: 'Location Sensitivity', val: report.priority_breakdown.factors.location, weight: '15%' },
-                { label: 'Incident Severity', val: report.priority_breakdown.factors.severity, weight: '15%' },
-                { label: 'Report Volume / Cluster', val: report.priority_breakdown.factors.report_volume, weight: '10%' },
-                { label: 'Vulnerable Population', val: report.priority_breakdown.factors.vulnerable_population, weight: '10%' },
-                { label: 'Weather / Seasonality', val: report.priority_breakdown.factors.weather, weight: '10%' },
-                { label: 'Time Open / SLA Breach', val: report.priority_breakdown.factors.time_open, weight: '10%' },
-                { label: 'Urgency & Evidence', val: report.priority_breakdown.factors.urgency_evidence, weight: '10%' },
-              ].map((factor, fIdx) => (
-                <div key={fIdx} style={{ fontSize: '0.75rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
-                    <span style={{ color: 'var(--text-secondary)' }}>{factor.label} <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>({factor.weight})</span></span>
-                    <span className="mono" style={{ fontWeight: 700, color: factor.val >= 70 ? 'var(--accent-rose)' : 'var(--text-primary)' }}>
-                      {factor.val}/100
-                    </span>
-                  </div>
-                  <div style={{ width: '100%', height: '5px', backgroundColor: 'var(--bg-input)', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div
-                      style={{
-                        width: `${Math.min(100, Math.max(0, factor.val))}%`,
-                        height: '100%',
-                        backgroundColor: factor.val >= 80 ? '#f43f5e' : factor.val >= 50 ? '#f59e0b' : '#38bdf8',
-                        borderRadius: '3px',
-                        transition: 'width 0.4s ease',
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      ) : null}
 
       {/* 7. Activity & Audit Timeline */}
       <ActivityTimeline timeline={report.timeline || []} />

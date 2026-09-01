@@ -162,13 +162,45 @@ export interface PriorityFactors {
   urgency_evidence: number;
 }
 
+export interface ContributingFactor {
+  key: string;
+  label: string;
+  score: number;
+  weight: number;
+  weight_percent: number;
+  weighted_points: number;
+  status: 'critical' | 'elevated' | 'normal' | 'overdue' | 'on_track' | 'high';
+  detail?: string | null;
+}
+
+export interface EscalationAudit {
+  applied: boolean;
+  type?: 'SAFETY_HAZARD_FLOOR' | 'REGULATORY_OVERRIDE' | string | null;
+  base_score: number;
+  final_score: number;
+  points_added: number;
+  reason?: string | null;
+}
+
+export interface StructuredPriorityExplanation {
+  icon: string;
+  tag: string;
+  title: string;
+  text: string;
+}
+
 export interface PriorityBreakdown {
   score: number;
+  base_score?: number;
   bucket: PriorityBucket | string;
   response_target?: string;
+  severity_level?: string;
+  severity_explanation?: string[];
+  escalation?: EscalationAudit | null;
   policy_version: string;
   weights?: Record<string, number>;
   factors: PriorityFactors;
+  contributing_factors?: ContributingFactor[];
   radius?: {
     base_radius_m: number;
     ai_recommended_radius_m?: number | null;
@@ -181,6 +213,7 @@ export interface PriorityBreakdown {
     reason?: string;
   } | null;
   explanations: string[];
+  structured_explanations?: StructuredPriorityExplanation[];
 }
 
 export interface AIAnalysis {

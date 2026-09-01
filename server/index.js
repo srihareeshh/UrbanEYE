@@ -14,7 +14,7 @@ import { clusterReportsByProximity, detectCivicHotspots, detectSystemicPatterns 
 import { globalGeminiManager } from './ai/geminiRequestManager.js';
 import { AIJobPriority } from './ai/types.js';
 import { computeMediaHash } from './ai/mediaHasher.js';
-import { calculateDynamicPriority, PRIORITY_POLICY_VERSION, getPriorityBucket } from './priority/priorityEngine.js';
+import { calculateDynamicPriority, PRIORITY_POLICY_VERSION, getPriorityBucket, generateSeverityExplanation } from './priority/priorityEngine.js';
 import { calculateEffectiveRadius } from './geo/radiusPolicy.js';
 import { locationIntelligence } from './geo/locationIntelligence.js';
 import { weatherService } from './services/weatherService.js';
@@ -299,6 +299,16 @@ export async function processReportAICompletion(reportId, aiResult, aiError) {
 
     // Save Historical Priority Snapshot
     const priorityId = `pri_${crypto.randomBytes(8).toString('hex')}`;
+    const explanationPayload = {
+      explanations: dynamicPriority.explanations,
+      structured_explanations: dynamicPriority.structured_explanations,
+      base_score: dynamicPriority.base_score,
+      escalation: dynamicPriority.escalation,
+      severity_level: dynamicPriority.severity_level,
+      severity_explanation: dynamicPriority.severity_explanation,
+      contributing_factors: dynamicPriority.contributing_factors
+    };
+
     await db.query(`
       INSERT INTO report_priority_scores (
         id, report_id, score, bucket, policy_version, weights_json, factor_scores_json,
@@ -314,7 +324,7 @@ export async function processReportAICompletion(reportId, aiResult, aiError) {
       JSON.stringify(dynamicPriority.factors),
       JSON.stringify(dynamicPriority.radius),
       JSON.stringify(dynamicPriority.override),
-      JSON.stringify(dynamicPriority.explanations)
+      JSON.stringify(explanationPayload)
     ]);
 
     // Add Timeline Event for AI Analysis completion
@@ -862,29 +872,47 @@ app.get('/api/reports/:id', async (req, res) => {
 
     let priorityData = null;
     if (latestPriority) {
+      const rawExp = parseJsonSafe(latestPriority.explanation_json, []);
+      const isRichExp = rawExp && typeof rawExp === 'object' && !Array.isArray(rawExp);
+
       priorityData = {
         score: latestPriority.score,
+        base_score: isRichExp ? (rawExp.base_score ?? latestPriority.score) : latestPriority.score,
         bucket: latestPriority.bucket,
         policy_version: latestPriority.policy_version,
+        severity_level: isRichExp ? rawExp.severity_level : (latestAi?.structured_output?.severity >= 8 ? 'Critical' : report.severity || 'Moderate'),
+        severity_explanation: isRichExp ? rawExp.severity_explanation : [report.description || 'Assessed based on reported incident impact.'],
+        escalation: isRichExp ? rawExp.escalation : { applied: false, points_added: 0, reason: null },
         weights: parseJsonSafe(latestPriority.weights_json, {}),
         factors: parseJsonSafe(latestPriority.factor_scores_json, {}),
+        contributing_factors: isRichExp ? (rawExp.contributing_factors || []) : [],
         radius: parseJsonSafe(latestPriority.radius_json, {}),
         override: parseJsonSafe(latestPriority.override_json, null),
-        explanations: parseJsonSafe(latestPriority.explanation_json, [])
+        explanations: isRichExp ? rawExp.explanations : (Array.isArray(rawExp) ? rawExp : []),
+        structured_explanations: isRichExp ? (rawExp.structured_explanations || []) : []
       };
     } else {
-      // Fast fallback calculation
+      // Dynamic on-the-fly priority evaluation if snapshot not yet written
       const fallbackBucket = getPriorityBucket(report.civic_priority_score || 30);
       const fallbackRadius = calculateEffectiveRadius(report.category);
+      const sevLevel = report.severity === 'Dangerous' ? 'Critical' : report.severity === 'Serious' ? 'High' : report.severity === 'Moderate' ? 'Medium' : 'Low';
+      const sevExp = generateSeverityExplanation({ category: report.category, description: report.description, severityLevel: sevLevel, isRiskPresent: report.is_risk_present });
+
       priorityData = {
         score: report.civic_priority_score || 30,
+        base_score: report.civic_priority_score || 30,
         bucket: fallbackBucket.bucket,
         policy_version: PRIORITY_POLICY_VERSION,
+        severity_level: sevLevel,
+        severity_explanation: sevExp,
+        escalation: { applied: false, points_added: 0, reason: null },
         weights: {},
-        factors: { safety: 50, location: 40, severity: 50, report_volume: 30, vulnerable_population: 30, weather: 30, time_open: 20, urgency_evidence: 40 },
+        factors: { safety: 50, location: 40, severity: 50, report_volume: 30, vulnerable_population: 30, weather: 10, time_open: 20, urgency_evidence: 40 },
+        contributing_factors: [],
         radius: fallbackRadius,
         override: null,
-        explanations: ['Initial baseline priority']
+        explanations: ['Initial baseline priority scheduled in municipal workflow'],
+        structured_explanations: []
       };
     }
 
@@ -1557,6 +1585,7 @@ app.get('/api/community/issues', async (req, res) => {
       lng = 72.8777,
       sort = 'nearby',
       category = 'all',
+      priority = 'all',
       search = '',
     } = req.query;
 
@@ -1601,7 +1630,7 @@ app.get('/api/community/issues', async (req, res) => {
       userFollowsRes.rows.forEach(f => userFollowedSet.add(f.report_id));
     }
 
-    const enriched = rows.map((r) => {
+    let enriched = rows.map((r) => {
       const distance = calculateHaversineDistance(userLat, userLng, r.latitude, r.longitude);
       const approxLocation = getApproximateLocationText(r.address, r.city, distance);
 
@@ -1627,6 +1656,10 @@ app.get('/api/community/issues', async (req, res) => {
         severity_weight: severityWeight,
       };
     });
+
+    if (priority && priority !== 'all' && priority !== 'All') {
+      enriched = enriched.filter(item => String(item.priority_bucket).toUpperCase() === String(priority).toUpperCase());
+    }
 
     if (sort === 'nearby') {
       enriched.sort((a, b) => {

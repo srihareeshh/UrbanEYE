@@ -16,6 +16,7 @@ import {
   Navigation,
 } from 'lucide-react';
 import { CommunityIssueCard } from './CommunityIssueCard';
+import { PriorityFilter, type PriorityFilterValue } from './PriorityFilter';
 import type { StoredReport, CommunitySortOption } from '../types';
 import {
   getCitizenLocation,
@@ -51,6 +52,7 @@ export const CommunityIssuesFeed: React.FC<CommunityIssuesFeedProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSort, setSelectedSort] = useState<CommunitySortOption>('nearby');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedPriority, setSelectedPriority] = useState<PriorityFilterValue>('all');
   const [currentLocation, setCurrentLocation] = useState<SavedUserLocation>(getCitizenLocation());
   const [isLocationSelectorOpen, setIsLocationSelectorOpen] = useState(false);
   const [isDetectingGps, setIsDetectingGps] = useState(false);
@@ -83,6 +85,7 @@ export const CommunityIssuesFeed: React.FC<CommunityIssuesFeedProps> = ({
         lng: currentLocation.longitude.toString(),
         sort: selectedSort,
         category: selectedCategory,
+        priority: selectedPriority,
         search: searchQuery,
       });
 
@@ -97,7 +100,7 @@ export const CommunityIssuesFeed: React.FC<CommunityIssuesFeedProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [currentLocation, selectedSort, selectedCategory, searchQuery, onShowToast]);
+  }, [currentLocation, selectedSort, selectedCategory, selectedPriority, searchQuery, onShowToast]);
 
   useEffect(() => {
     fetchCommunityIssues();
@@ -526,6 +529,14 @@ export const CommunityIssuesFeed: React.FC<CommunityIssuesFeedProps> = ({
                 </button>
               );
             })}
+          </div>
+
+          {/* Priority Bucket Filter */}
+          <div style={{ paddingTop: '0.45rem', borderTop: '1px solid var(--border-subtle)' }}>
+            <PriorityFilter
+              selectedPriority={selectedPriority}
+              onSelectPriority={setSelectedPriority}
+            />
           </div>
         </div>
       </div>

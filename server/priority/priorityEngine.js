@@ -190,10 +190,93 @@ export function calculateUrgencyEvidenceScore({
  * Maps Priority Score to Response Bucket
  */
 export function getPriorityBucket(score) {
-  if (score >= 80) return { bucket: 'CRITICAL', response_target: 'Same-day response (< 12-24h)' };
+  if (score >= 80) return { bucket: 'CRITICAL', response_target: 'Same-day response (< 12–24h)' };
   if (score >= 50) return { bucket: 'HIGH', response_target: '24–72 hours' };
   if (score >= 25) return { bucket: 'MEDIUM', response_target: '3–14 days' };
   return { bucket: 'LOW', response_target: 'Scheduled maintenance cycle' };
+}
+
+/**
+ * Generates Scenario-Grounded Severity Explanations ("Why this severity?")
+ */
+export function generateSeverityExplanation({
+  category = '',
+  description = '',
+  severityLevel = 'Moderate',
+  aiAnalysis = null,
+  isRiskPresent = false
+}) {
+  const reasons = [];
+  const text = `${category} ${description}`.toLowerCase();
+  const sevUpper = String(severityLevel || 'MODERATE').toUpperCase();
+
+  // 1. If AI structured analysis already provided ground-truth risk factors, use them directly
+  if (aiAnalysis && Array.isArray(aiAnalysis.risk_factors) && aiAnalysis.risk_factors.length > 0) {
+    aiAnalysis.risk_factors.slice(0, 3).forEach(rf => {
+      // Capitalize first letter
+      const clean = String(rf).trim();
+      if (clean) {
+        reasons.push(clean.charAt(0).toUpperCase() + clean.slice(1));
+      }
+    });
+  }
+
+  // 2. Domain-Specific Severity Fallback Rules if AI list is empty
+  if (reasons.length === 0) {
+    const isElec = category.toLowerCase().includes('electr') || text.includes('wire') || text.includes('spark') || text.includes('transformer') || text.includes('voltage');
+    const isWater = category.toLowerCase().includes('water') || text.includes('flood') || text.includes('drain') || text.includes('pipe') || text.includes('sewage');
+    const isRoad = category.toLowerCase().includes('road') || text.includes('pothole') || text.includes('crack') || text.includes('bridge') || text.includes('traffic');
+    const isSanitation = category.toLowerCase().includes('sanit') || text.includes('garbage') || text.includes('waste') || text.includes('trash') || text.includes('dump');
+    const isHealth = category.toLowerCase().includes('health') || text.includes('hospital') || text.includes('clinic') || text.includes('disease');
+    const isLight = category.toLowerCase().includes('light') || text.includes('streetlight') || text.includes('dark');
+
+    if (isElec) {
+      if (sevUpper === 'CRITICAL' || sevUpper === 'DANGEROUS' || isRiskPresent) {
+        reasons.push('Exposed electrical components present an immediate electrocution and fire hazard.');
+        reasons.push('The hazard is directly accessible to passing pedestrians and local residents.');
+        reasons.push('Uninsulated active current requires urgent power isolation and repair.');
+      } else {
+        reasons.push('Power disruption affects local household and commercial activity.');
+        reasons.push('Electrical fault requires scheduled lineman diagnosis.');
+      }
+    } else if (isRoad) {
+      if (sevUpper === 'CRITICAL' || sevUpper === 'DANGEROUS' || sevUpper === 'HIGH' || sevUpper === 'SERIOUS') {
+        reasons.push('Deep road damage may cause vehicle accidents, particularly for two-wheelers.');
+        reasons.push('Located on a high-speed or active public transit corridor.');
+      } else {
+        reasons.push('Surface wear and minor potholes create uneven driving conditions.');
+        reasons.push('Requires inclusion in routine asphalt patching cycle.');
+      }
+    } else if (isWater) {
+      if (text.includes('contaminat') || text.includes('drinking') || text.includes('smell') || text.includes('poison')) {
+        reasons.push('Potential contamination of drinking water can affect public health across the community.');
+        reasons.push('Piped supply backflow poses acute risks to children and vulnerable residents.');
+      } else if (sevUpper === 'CRITICAL' || sevUpper === 'DANGEROUS' || text.includes('flood') || text.includes('waterlog')) {
+        reasons.push('Significant water accumulation is blocking the roadway and creates safety and mobility risks.');
+        reasons.push('Stagnant stormwater risks vector breeding and foundation water seepage.');
+      } else {
+        reasons.push('Minor water leak or slow drainage creates inconvenience in local lane.');
+        reasons.push('Scheduled drain clearing and valve maintenance required.');
+      }
+    } else if (isSanitation) {
+      if (sevUpper === 'CRITICAL' || sevUpper === 'DANGEROUS' || text.includes('biohazard') || text.includes('medical')) {
+        reasons.push('Hazardous or medical waste accumulation poses acute contamination risks.');
+      } else {
+        reasons.push('Accumulated solid waste creates sanitation concerns but no immediate severe hazard is detected.');
+        reasons.push('Odor and street aesthetic degradation in residential vicinity.');
+      }
+    } else if (isHealth) {
+      reasons.push('Direct risk to public health and sanitization standards in community zone.');
+    } else if (isLight) {
+      reasons.push('Reduced visibility on street increases pedestrian tripping and vehicle safety risks.');
+      reasons.push('Dark road corridor elevates localized night security concerns.');
+    } else {
+      reasons.push(`Incident severity reflects reported ${sevUpper.toLowerCase()} structural impact.`);
+      reasons.push('Physical condition requires municipal inspection and remedial action.');
+    }
+  }
+
+  return reasons;
 }
 
 /**
@@ -219,59 +302,137 @@ export function generateScoreExplanation({
   const isSanitation = category.toLowerCase().includes('sanitation') || text.includes('garbage') || text.includes('waste') || text.includes('trash') || text.includes('dump');
 
   if (overrideApplied) {
-    bullets.push(`Regulatory / Municipal Priority Override Active (${overrideReason || 'Administrative priority directive'})`);
+    bullets.push({
+      icon: '🚨',
+      tag: 'REGULATORY OVERRIDE',
+      title: 'Administrative Priority Directive Active',
+      text: overrideReason || 'Authorized authority directive applied a mandatory priority floor.'
+    });
   }
 
   if (safetyFloorApplied) {
     if (isElectrical) {
-      bullets.push('Critical Safety Hazard Floor: High electrocution / fire hazard near public thoroughfare');
+      bullets.push({
+        icon: '⚠️',
+        tag: 'CRITICAL HAZARD ESCALATION',
+        title: 'Emergency Life-Safety Floor Triggered',
+        text: 'The safety risk crossed the critical threshold (safety risk >= 90), triggering the emergency priority policy for electrocution / fire danger.'
+      });
     } else {
-      bullets.push('Critical Safety Hazard Floor Applied (Severe human safety or acute health risk)');
+      bullets.push({
+        icon: '⚠️',
+        tag: 'CRITICAL HAZARD ESCALATION',
+        title: 'Emergency Life-Safety Floor Triggered',
+        text: 'The safety risk crossed the critical threshold, triggering the emergency priority policy.'
+      });
     }
   } else if (factors.safety >= 70) {
     if (isElectrical) {
-      bullets.push(`Critical Electrical Safety Risk (${factors.safety}/100): Risk of electrocution, short-circuit, or power failure`);
+      bullets.push({
+        icon: '⚡',
+        tag: 'SAFETY HAZARD',
+        title: 'High Electrical Danger Potential',
+        text: `Safety score ${factors.safety}/100: Elevated risk of electrocution, short-circuit, or power infrastructure failure.`
+      });
     } else if (isWater) {
-      bullets.push(`High Water Hazard (${factors.safety}/100): Risk of contamination or structural water damage`);
+      bullets.push({
+        icon: '💧',
+        tag: 'SAFETY HAZARD',
+        title: 'High Hydrological Risk',
+        text: `Safety score ${factors.safety}/100: Risk of water contamination or road foundation damage.`
+      });
     } else if (isRoad) {
-      bullets.push(`Severe Roadway Hazard (${factors.safety}/100): High collision or vehicle damage risk`);
+      bullets.push({
+        icon: '🚗',
+        tag: 'SAFETY HAZARD',
+        title: 'Severe Roadway Danger',
+        text: `Safety score ${factors.safety}/100: High vehicle collision or two-wheeler skidding risk.`
+      });
     } else {
-      bullets.push(`High Safety/Hazard Potential (${factors.safety}/100): Elevated risk to public safety`);
+      bullets.push({
+        icon: '⚠️',
+        tag: 'SAFETY HAZARD',
+        title: 'Elevated Safety Hazard',
+        text: `Safety score ${factors.safety}/100: Direct risk of physical injury or property damage.`
+      });
     }
   } else if (isElectrical && (text.includes('power cut') || text.includes('outage') || text.includes('blackout') || text.includes('no power'))) {
-    bullets.push('Grid Outage: Power disruption affecting local residential / commercial activity');
+    bullets.push({
+      icon: '🔌',
+      tag: 'GRID DISRUPTION',
+      title: 'Localized Power Outage',
+      text: 'Power supply interruption affecting local residents and commercial facilities.'
+    });
   }
 
   if (topLandmark && factors.location >= 65) {
-    bullets.push(`Critical Proximity to ${topLandmark.name} (${topLandmark.distanceM}m away)`);
+    bullets.push({
+      icon: '📍',
+      tag: 'LOCATION SENSITIVITY',
+      title: `Critical Proximity to ${topLandmark.name}`,
+      text: `Located ${topLandmark.distanceM}m away from a sensitive public landmark / transit facility.`
+    });
   }
 
   // Only mention cluster volume if there are multiple reports of the SAME category
   if (sameCategoryCount >= 2) {
-    bullets.push(`Cluster Concentration: ${sameCategoryCount} recurring ${category.toLowerCase()} reports recorded in local impact zone`);
+    bullets.push({
+      icon: '🔄',
+      tag: 'CLUSTER RECURRENCE',
+      title: `${sameCategoryCount} Similar Community Reports`,
+      text: `Cluster density identified: ${sameCategoryCount} recurring ${category.toLowerCase()} grievances recorded in the effective impact zone.`
+    });
   }
 
   // Only mention weather if weather is genuinely stormy / adverse AND relevant
   if (weatherInfo && weatherInfo.severe_weather && factors.weather >= 60) {
-    bullets.push(`Adverse Weather Alert (${weatherInfo.condition_summary}): Storm/environmental conditions aggravating site risk`);
+    bullets.push({
+      icon: '🌧',
+      tag: 'WEATHER AMPLIFICATION',
+      title: `Adverse Weather (${weatherInfo.condition_summary})`,
+      text: 'Active severe weather conditions are compounding the severity and urgency of this issue.'
+    });
   } else if (isWater && weatherInfo && weatherInfo.is_raining && factors.weather >= 50) {
-    bullets.push(`Rainfall Amplification: Active precipitation compounding local drainage load`);
+    bullets.push({
+      icon: '🌧',
+      tag: 'WEATHER AMPLIFICATION',
+      title: 'Rainfall Load Amplification',
+      text: 'Active precipitation is compounding local drainage load and surface water accumulation.'
+    });
   }
 
   if (factors.vulnerable_population >= 65) {
-    bullets.push('Elevated Impact on Sensitive Zone (Nearby School, Hospital, or Dense Pedestrian Area)');
+    bullets.push({
+      icon: '👥',
+      tag: 'VULNERABLE POPULATION',
+      title: 'Elevated Impact on Sensitive Groups',
+      text: 'The affected area impacts schools, children, elderly residents, or healthcare facilities.'
+    });
   }
 
   if (factors.time_open >= 75) {
-    bullets.push('SLA Escalation: Grievance has exceeded standard resolution timeframe');
-  }
-
-  if (aiAnalysis && aiAnalysis.issue_type && aiAnalysis.status === 'completed') {
-    bullets.push(`AI Diagnostic: Identified as ${aiAnalysis.issue_type.replace(/_/g, ' ')} with ${Math.round((aiAnalysis.evidence_confidence || 0.85) * 100)}% evidence confidence`);
+    bullets.push({
+      icon: '⏱',
+      tag: 'SLA ESCALATION',
+      title: 'Resolution SLA Overdue',
+      text: 'This grievance has exceeded the standard municipal triage turnaround target.'
+    });
+  } else if (factors.urgency_evidence >= 75) {
+    bullets.push({
+      icon: '⏱',
+      tag: 'URGENCY & EVIDENCE',
+      title: 'High Verification Urgency',
+      text: 'Verified evidence and incident characteristics indicate urgent municipal intervention is recommended.'
+    });
   }
 
   if (bullets.length === 0) {
-    bullets.push(`Routine ${category} maintenance assessment scheduled`);
+    bullets.push({
+      icon: '📋',
+      tag: 'ROUTINE CIVIC TRIAGE',
+      title: 'Standard Civic Maintenance Priority',
+      text: `Assigned standard triage turnaround in the regular ${category} municipal work cycle.`
+    });
   }
 
   return bullets;
@@ -318,7 +479,7 @@ export async function calculateDynamicPriority({
   // Factor 1: Safety Hazard
   let safetyScore = 20;
   const text = `${category} ${description}`.toLowerCase();
-  const isHighDangerKeywords = text.includes('spark') || text.includes('wire') || text.includes('shock') || text.includes('fire') || text.includes('sinkhole') || text.includes('gas');
+  const isHighDangerKeywords = text.includes('spark') || text.includes('wire') || text.includes('shock') || text.includes('fire') || text.includes('sinkhole') || text.includes('gas') || text.includes('collapse') || text.includes('burst');
 
   if (isRiskPresent) safetyScore += 35;
   if (isHighDangerKeywords) safetyScore += 25;
@@ -380,7 +541,7 @@ export async function calculateDynamicPriority({
   const weights = domainProfile.weights;
 
   // 7. Weighted Composite Score
-  let weightedScore =
+  const rawWeightedScore =
     (safety_hazard_score * weights.safety) +
     (location_sensitivity_score * weights.location) +
     (severity_score * weights.severity) +
@@ -390,13 +551,17 @@ export async function calculateDynamicPriority({
     (time_open_score * weights.time_open) +
     (urgency_evidence_score * weights.urgency_evidence);
 
-  let finalScore = Math.round(weightedScore);
+  const baseWeightedScore = Math.round(rawWeightedScore);
+  let finalScore = baseWeightedScore;
 
   // 8. Safety Floor Rule: If safety or health hazard >= 90 or exposed live wire/shock risk, enforce minimum 80 CRITICAL
   let safetyFloorApplied = false;
+  let safetyEscalationPoints = 0;
   const healthRisk = aiAnalysis?.health_risk ? Number(aiAnalysis.health_risk) * 10 : 0;
+
   if (safety_hazard_score >= 90 || healthRisk >= 90) {
     if (finalScore < 80) {
+      safetyEscalationPoints = 80 - finalScore;
       finalScore = 80;
       safetyFloorApplied = true;
     }
@@ -405,17 +570,38 @@ export async function calculateDynamicPriority({
   // 9. Regulatory / Political Overrides (Authority Only)
   let overrideApplied = false;
   let overrideReason = null;
+  let overridePoints = 0;
+
   if (override && override.override_enabled) {
     overrideApplied = true;
     overrideReason = override.override_reason || 'Administrative priority override';
     const floor = Number(override.override_priority_floor || 85);
-    finalScore = Math.max(finalScore, floor);
+    if (finalScore < floor) {
+      overridePoints = floor - finalScore;
+      finalScore = floor;
+    }
   }
 
   finalScore = Math.min(100, Math.max(1, finalScore));
   const bucketInfo = getPriorityBucket(finalScore);
 
-  const explanations = generateScoreExplanation({
+  // 10. Severity Level & Explanation Generation
+  let severityLevel = userSeverity;
+  if (severity_score >= 85) severityLevel = 'Critical';
+  else if (severity_score >= 65) severityLevel = 'High';
+  else if (severity_score >= 40) severityLevel = 'Medium';
+  else severityLevel = 'Low';
+
+  const severityExplanations = generateSeverityExplanation({
+    category,
+    description,
+    severityLevel,
+    aiAnalysis,
+    isRiskPresent
+  });
+
+  // 11. Priority Explanations & Contributing Factors Array
+  const structuredExplanations = generateScoreExplanation({
     category,
     description,
     factors: {
@@ -437,12 +623,108 @@ export async function calculateDynamicPriority({
     aiAnalysis
   });
 
+  const contributingFactors = [
+    {
+      key: 'safety',
+      label: 'Safety & Hazard Potential',
+      score: safety_hazard_score,
+      weight: weights.safety,
+      weight_percent: Math.round(weights.safety * 100),
+      weighted_points: Math.round((safety_hazard_score * weights.safety) * 10) / 10,
+      status: safety_hazard_score >= 80 ? 'critical' : safety_hazard_score >= 50 ? 'elevated' : 'normal',
+      detail: isHighDangerKeywords ? 'High electrocution/collapse hazard detected' : null
+    },
+    {
+      key: 'location',
+      label: 'Location Sensitivity',
+      score: location_sensitivity_score,
+      weight: weights.location,
+      weight_percent: Math.round(weights.location * 100),
+      weighted_points: Math.round((location_sensitivity_score * weights.location) * 10) / 10,
+      status: location_sensitivity_score >= 65 ? 'high' : 'normal',
+      detail: locationSensitivity.topLandmark ? `${locationSensitivity.topLandmark.name} (${locationSensitivity.topLandmark.distanceM}m away)` : 'Standard sector'
+    },
+    {
+      key: 'severity',
+      label: 'Incident Severity',
+      score: severity_score,
+      weight: weights.severity,
+      weight_percent: Math.round(weights.severity * 100),
+      weighted_points: Math.round((severity_score * weights.severity) * 10) / 10,
+      status: severity_score >= 70 ? 'high' : 'normal',
+      detail: `Assessed at ${severityLevel} level`
+    },
+    {
+      key: 'report_volume',
+      label: 'Cluster Volume & Duplicates',
+      score: report_volume_score,
+      weight: weights.report_volume,
+      weight_percent: Math.round(weights.report_volume * 100),
+      weighted_points: Math.round((report_volume_score * weights.report_volume) * 10) / 10,
+      status: clusterInfo.sameCategoryCount >= 2 ? 'elevated' : 'normal',
+      detail: clusterInfo.sameCategoryCount >= 1 ? `${clusterInfo.sameCategoryCount} recurring ${category.toLowerCase()} report(s) in radius` : 'Isolated incident'
+    },
+    {
+      key: 'vulnerable_population',
+      label: 'Vulnerable Population Impact',
+      score: vulnerable_population_score,
+      weight: weights.vulnerable_population,
+      weight_percent: Math.round(weights.vulnerable_population * 100),
+      weighted_points: Math.round((vulnerable_population_score * weights.vulnerable_population) * 10) / 10,
+      status: vulnerable_population_score >= 65 ? 'high' : 'normal',
+      detail: vulnerable_population_score >= 65 ? 'Proximity to schools, clinics, or dense pedestrian area' : 'Standard residential/transit zone'
+    },
+    {
+      key: 'weather',
+      label: 'Weather & Environmental Amplification',
+      score: weather_score,
+      weight: weights.weather,
+      weight_percent: Math.round(weights.weather * 100),
+      weighted_points: Math.round((weather_score * weights.weather) * 10) / 10,
+      status: weather_score >= 60 ? 'elevated' : 'normal',
+      detail: weatherInfo.condition_summary
+    },
+    {
+      key: 'time_open',
+      label: 'Time Open & SLA Status',
+      score: time_open_score,
+      weight: weights.time_open,
+      weight_percent: Math.round(weights.time_open * 100),
+      weighted_points: Math.round((time_open_score * weights.time_open) * 10) / 10,
+      status: time_open_score >= 70 ? 'overdue' : 'on_track',
+      detail: time_open_score >= 70 ? 'SLA resolution target exceeded' : 'Within initial municipal response SLA'
+    },
+    {
+      key: 'urgency_evidence',
+      label: 'Urgency & Evidence Confidence',
+      score: urgency_evidence_score,
+      weight: weights.urgency_evidence,
+      weight_percent: Math.round(weights.urgency_evidence * 100),
+      weighted_points: Math.round((urgency_evidence_score * weights.urgency_evidence) * 10) / 10,
+      status: urgency_evidence_score >= 70 ? 'high' : 'normal',
+      detail: report.photo_url || (report.media && report.media.length > 0) ? 'Photo/geotagged evidence verified' : 'Citizen description'
+    }
+  ];
+
   return {
     score: finalScore,
+    base_score: baseWeightedScore,
     bucket: bucketInfo.bucket,
     response_target: bucketInfo.response_target,
+    severity_level: severityLevel,
+    severity_explanation: severityExplanations,
     safety_floor_applied: safetyFloorApplied,
     override_applied: overrideApplied,
+    escalation: {
+      applied: safetyFloorApplied || overrideApplied,
+      type: overrideApplied ? 'REGULATORY_OVERRIDE' : (safetyFloorApplied ? 'SAFETY_HAZARD_FLOOR' : null),
+      base_score: baseWeightedScore,
+      final_score: finalScore,
+      points_added: overrideApplied ? overridePoints : safetyEscalationPoints,
+      reason: overrideApplied
+        ? `Regulatory directive applied priority floor ${finalScore}`
+        : (safetyFloorApplied ? 'Extreme safety/health risk exceeded critical threshold (>=90), enforcing emergency priority policy floor.' : null)
+    },
     policy_version: PRIORITY_POLICY_VERSION,
     domain_profile: domainProfile.name,
     weights,
@@ -456,6 +738,7 @@ export async function calculateDynamicPriority({
       time_open: time_open_score,
       urgency_evidence: urgency_evidence_score
     },
+    contributing_factors: contributingFactors,
     radius: {
       base_radius_m: radiusInfo.base_radius_m,
       ai_recommended_radius_m: aiRecommendedRadius,
@@ -475,6 +758,7 @@ export async function calculateDynamicPriority({
       is_severe: weatherInfo.severe_weather
     },
     override: overrideApplied ? { enabled: true, reason: overrideReason } : null,
-    explanations
+    explanations: structuredExplanations.map(e => (typeof e === 'string' ? e : e.title || e.text)),
+    structured_explanations: structuredExplanations
   };
 }
