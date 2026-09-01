@@ -216,6 +216,62 @@ export interface PriorityBreakdown {
   structured_explanations?: StructuredPriorityExplanation[];
 }
 
+export interface StructuredAIAssessment {
+  immediate_action_required: boolean;
+  immediate_action_decision: 'YES' | 'NO' | 'UNCERTAIN';
+  immediate_action_summary: string;
+  immediate_action_reason: string;
+  recommended_immediate_actions?: string[];
+
+  innovation_required: boolean;
+  innovation_decision: 'YES' | 'NO' | 'UNCERTAIN';
+  innovation_summary: string;
+  innovation_reason: string;
+  required_capabilities: string[];
+
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  severity_score?: number;
+  severity_reason?: string;
+  severity_explanation?: string[];
+  urgency: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  urgency_score?: number;
+
+  problem_statement: string;
+
+  existing_solution_status: 'ADEQUATE' | 'INSUFFICIENT' | 'UNSUITABLE_LOCALLY' | 'REPEATEDLY_FAILING' | 'UNKNOWN';
+  existing_solution_summary: string;
+
+  assessment_factors?: {
+    public_safety_risk: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+    recurring_problem: boolean;
+    existing_solution: 'ADEQUATE' | 'INSUFFICIENT' | 'REPEATEDLY_FAILING' | 'UNKNOWN';
+    innovation_potential: 'HIGH' | 'MEDIUM' | 'LOW';
+  };
+
+  recommended_next_steps: string[];
+  confidence: number;
+
+  domain?: string;
+  issue_type?: string;
+  subtype?: string;
+  safety_risk?: number;
+  health_risk?: number;
+  recurrence?: string;
+  recommended_radius_m?: number;
+  evidence_confidence?: number;
+  affected_entities?: string[];
+  risk_factors?: string[];
+}
+
+export interface GovernmentAIDecision {
+  status: 'confirmed' | 'overridden';
+  action_decision: boolean;
+  innovation_decision: boolean;
+  override_reason?: string | null;
+  reviewed_by: string;
+  reviewed_at: string;
+}
+
 export interface AIAnalysis {
   id?: string;
   report_id?: string;
@@ -233,9 +289,12 @@ export interface AIAnalysis {
   evidence_confidence?: number;
   recommended_radius_m?: number;
   effective_radius_m?: number;
-  structured_output?: any;
+  structured_output?: StructuredAIAssessment;
+  government_decision?: GovernmentAIDecision | null;
   status: 'pending' | 'processing' | 'completed' | 'failed' | 'fallback';
   created_at?: string;
+  completed_at?: string;
+  error_message?: string;
 }
 
 export interface StoredReport {

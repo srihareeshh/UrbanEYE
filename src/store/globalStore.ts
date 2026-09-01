@@ -27,7 +27,16 @@ interface GlobalContextType {
   isLoading: boolean;
   refreshAll: () => Promise<void>;
   
-  // Municipal Actions
+  // Municipal & AI Actions
+  reanalyzeReportWithAI: (reportId: string) => Promise<any>;
+  saveGovernmentAIDecision: (reportId: string, decision: {
+    status: 'confirmed' | 'overridden';
+    action_decision: boolean;
+    innovation_decision: boolean;
+    override_reason?: string;
+    reviewed_by?: string;
+  }) => Promise<boolean>;
+
   dispatchWorkOrder: (params: {
     reportId: string;
     departmentName: string;
@@ -214,6 +223,51 @@ export const GlobalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   useEffect(() => {
     refreshAll();
   }, [refreshAll]);
+
+  // AI Analysis Actions
+  const reanalyzeReportWithAI = async (reportId: string): Promise<any> => {
+    try {
+      const res = await apiFetch(`/api/reports/${reportId}/analyze`, {
+        method: 'POST',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        await refreshAll();
+        return data.analysis || null;
+      }
+      return null;
+    } catch (e) {
+      console.error('reanalyzeReportWithAI error:', e);
+      return null;
+    }
+  };
+
+  const saveGovernmentAIDecision = async (
+    reportId: string,
+    decision: {
+      status: 'confirmed' | 'overridden';
+      action_decision: boolean;
+      innovation_decision: boolean;
+      override_reason?: string;
+      reviewed_by?: string;
+    }
+  ): Promise<boolean> => {
+    try {
+      const res = await apiFetch(`/api/reports/${reportId}/ai-decision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(decision),
+      });
+      if (res.ok) {
+        await refreshAll();
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error('saveGovernmentAIDecision error:', e);
+      return false;
+    }
+  };
 
   // Municipal Actions
   const dispatchWorkOrder = async (params: {
@@ -528,6 +582,8 @@ export const GlobalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         agreements,
         isLoading,
         refreshAll,
+        reanalyzeReportWithAI,
+        saveGovernmentAIDecision,
         dispatchWorkOrder,
         escalateToHEI,
         resolveDualSignoff,

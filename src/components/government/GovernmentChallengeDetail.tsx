@@ -374,14 +374,15 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
           {activeTab === 'decision' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
               {/* 1. AI Advisory Assessment Panel */}
-              <GovernmentAIAssessment report={report} />
+              <GovernmentAIAssessment report={report} onShowToast={onShowToast} />
 
               {/* 1B. Explainable Priority & Factor Breakdown */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
                 <SeverityExplanation
-                  severity={report.priority_breakdown?.severity_level || report.severity}
+                  severity={report.priority_breakdown?.severity_level || report.ai_analysis?.structured_output?.severity || report.severity}
                   category={report.category}
-                  reasons={report.priority_breakdown?.severity_explanation || []}
+                  reasons={report.priority_breakdown?.severity_explanation || report.ai_analysis?.structured_output?.severity_explanation || []}
+                  reasonSummary={report.ai_analysis?.structured_output?.severity_reason}
                   isAiAssessed={report.ai_analysis?.status === 'completed'}
                 />
                 {report.priority_breakdown && (

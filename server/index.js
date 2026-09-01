@@ -773,6 +773,7 @@ app.get('/api/reports', async (req, res) => {
     const resolutionsListRes = await db.query(`SELECT * FROM report_resolutions`);
     const challengesListRes = await db.query(`SELECT * FROM hei_challenges`);
     const projectsListRes = await db.query(`SELECT * FROM hei_projects`);
+    const aiAnalysisListRes = await db.query(`SELECT * FROM report_ai_analysis ORDER BY created_at DESC`);
 
     const mediaList = mediaListRes.rows;
     const metadataList = metadataListRes.rows;
@@ -780,10 +781,12 @@ app.get('/api/reports', async (req, res) => {
     const resolutionsList = resolutionsListRes.rows;
     const challengesList = challengesListRes.rows;
     const projectsList = projectsListRes.rows;
+    const aiAnalysisList = aiAnalysisListRes.rows;
 
     const enriched = reports.map(r => {
       const bucketInfo = getPriorityBucket(r.civic_priority_score || 30);
       const radiusInfo = calculateEffectiveRadius(r.category);
+      const reportAi = aiAnalysisList.find(a => a.report_id === r.id);
 
       return {
         ...r,
@@ -795,6 +798,11 @@ app.get('/api/reports', async (req, res) => {
         hei_challenge: challengesList.find(c => c.report_id === r.id) || null,
         hei_project: projectsList.find(p => p.report_id === r.id) || null,
         is_escalated_to_hei: !!challengesList.find(c => c.report_id === r.id),
+        ai_analysis: reportAi ? {
+          ...reportAi,
+          structured_output: parseJsonSafe(reportAi.structured_output_json),
+          government_decision: parseJsonSafe(reportAi.government_decision_json)
+        } : null,
         metadata: metadataList.filter(m => m.report_id === r.id).map(m => ({
           ...m,
           exif: parseJsonSafe(m.exif_json)
@@ -940,7 +948,8 @@ app.get('/api/reports/:id', async (req, res) => {
         } : null,
         ai_analysis: latestAi ? {
           ...latestAi,
-          structured_output: parseJsonSafe(latestAi.structured_output_json, null)
+          structured_output: parseJsonSafe(latestAi.structured_output_json, null),
+          government_decision: parseJsonSafe(latestAi.government_decision_json, null)
         } : null,
         priority_breakdown: priorityData,
         priority_bucket: priorityData.bucket,
@@ -993,11 +1002,7 @@ app.post('/api/reports/:id/analyze', async (req, res) => {
     const firstMedia = mediaRes.rows[0];
     const mediaDiskPath = firstMedia ? path.join(__dirname, firstMedia.file_path.replace(/^\//, '')) : null;
 
-    let priority = AIJobPriority.NORMAL;
-    if (report.is_risk_present || report.severity === 'Dangerous') priority = AIJobPriority.CRITICAL;
-    else if (report.severity === 'Serious') priority = AIJobPriority.HIGH;
-
-    const enqueueRes = await globalGeminiManager.enqueueAnalysis({
+    const analysisResult = await globalGeminiManager.provider.analyzeReport({
       report: {
         id: report.id,
         report_code: report.report_code,
@@ -1012,24 +1017,106 @@ app.post('/api/reports/:id/analyze', async (req, res) => {
       },
       location: locRes.rows[0] || {},
       mediaPath: mediaDiskPath,
-      mimeType: firstMedia?.mime_type,
-      priority
+      mimeType: firstMedia?.mime_type
     });
+
+    await processReportAICompletion(report.id, analysisResult, null);
+
+    // Timeline audit entry
+    await db.query(`
+      INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
+      VALUES ($1, $2, $3, 'authority', 'Government Reviewer', 'AI Assessment Regenerated', $4, CURRENT_TIMESTAMP)
+    `, [
+      `tml_${crypto.randomBytes(6).toString('hex')}`,
+      report.id,
+      report.status || 'Under Review',
+      `Officer requested fresh Gemini AI assessment. Confidence: ${Math.round((analysisResult.structuredOutput?.confidence || 0.9) * 100)}%. Immediate Action: ${analysisResult.structuredOutput?.immediate_action_decision || 'YES'}, Innovation: ${analysisResult.structuredOutput?.innovation_decision || 'NO'}.`
+    ]);
+
+    const updatedAiRes = await db.query(`SELECT * FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    const updatedAi = updatedAiRes.rows[0];
 
     res.json({
       success: true,
-      message: 'AI analysis job queued successfully.',
-      status: enqueueRes.status,
-      queue_depth: enqueueRes.queueDepth
+      message: 'AI assessment regenerated successfully.',
+      analysis: {
+        ...updatedAi,
+        structured_output: parseJsonSafe(updatedAi?.structured_output_json),
+        government_decision: parseJsonSafe(updatedAi?.government_decision_json)
+      }
     });
   } catch (err) {
     console.error('Trigger AI analysis error:', err);
-    res.status(500).json({ error: 'Failed to enqueue AI analysis.', details: err.message });
+    res.status(500).json({ error: 'Failed to run AI analysis.', details: err.message });
   }
 });
 
 // ==========================================
-// 5C. GET LATEST AI ANALYSIS FOR REPORT
+// 5C. RECORD GOVERNMENT CONFIRMATION / OVERRIDE OF AI ASSESSMENT
+// ==========================================
+app.post('/api/reports/:id/ai-decision', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      status = 'confirmed', // 'confirmed' | 'overridden'
+      action_decision = true,
+      innovation_decision = false,
+      override_reason = '',
+      reviewed_by = 'Municipal Zonal Officer'
+    } = req.body;
+
+    const reportRes = await db.query(`SELECT * FROM reports WHERE id = $1 OR report_code = $1`, [id]);
+    const report = reportRes.rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found.' });
+
+    const decisionPayload = {
+      status,
+      action_decision: Boolean(action_decision),
+      innovation_decision: Boolean(innovation_decision),
+      override_reason: override_reason || null,
+      reviewed_by,
+      reviewed_at: new Date().toISOString()
+    };
+
+    // Update latest AI analysis entry
+    const aiRes = await db.query(`SELECT id FROM report_ai_analysis WHERE report_id = $1 ORDER BY created_at DESC LIMIT 1`, [report.id]);
+    if (aiRes.rows.length > 0) {
+      await db.query(`
+        UPDATE report_ai_analysis SET government_decision_json = $1 WHERE id = $2
+      `, [JSON.stringify(decisionPayload), aiRes.rows[0].id]);
+    }
+
+    // Insert timeline audit event
+    const title = status === 'confirmed'
+      ? 'Government Confirmed AI Assessment'
+      : 'Government Overrode AI Recommendation';
+
+    const desc = `Decision by ${reviewed_by}: Immediate Action = ${action_decision ? 'YES' : 'NO'}, Innovation = ${innovation_decision ? 'YES' : 'NO'}.${override_reason ? ' Official Rationale: ' + override_reason : ''}`;
+
+    await db.query(`
+      INSERT INTO report_timeline (id, report_id, stage, actor_type, actor_name, title, description, created_at)
+      VALUES ($1, $2, $3, 'authority', $4, $5, $6, CURRENT_TIMESTAMP)
+    `, [
+      `tml_${crypto.randomBytes(6).toString('hex')}`,
+      report.id,
+      report.status || 'Under Review',
+      reviewed_by,
+      title,
+      desc
+    ]);
+
+    res.json({
+      success: true,
+      government_decision: decisionPayload
+    });
+  } catch (err) {
+    console.error('Record AI decision error:', err);
+    res.status(500).json({ error: 'Failed to record government AI decision.', details: err.message });
+  }
+});
+
+// ==========================================
+// 5D. GET LATEST AI ANALYSIS FOR REPORT
 // ==========================================
 app.get('/api/reports/:id/ai-analysis', async (req, res) => {
   try {
@@ -1053,7 +1140,8 @@ app.get('/api/reports/:id/ai-analysis', async (req, res) => {
       success: true,
       analysis: {
         ...row,
-        structured_output: parseJsonSafe(row.structured_output_json)
+        structured_output: parseJsonSafe(row.structured_output_json),
+        government_decision: parseJsonSafe(row.government_decision_json)
       }
     });
   } catch (err) {

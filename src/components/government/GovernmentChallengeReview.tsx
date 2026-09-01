@@ -401,6 +401,10 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
                             <Wrench size={13} />
                             <span>In Progress</span>
                           </span>
+                        ) : r.ai_analysis?.structured_output?.immediate_action_decision === 'NO' ? (
+                          <span style={{ color: '#94a3b8', fontWeight: 700, fontSize: '0.75rem' }}>
+                            Routine Cycle
+                          </span>
                         ) : (
                           <span style={{ color: '#f43f5e', fontWeight: 700, fontSize: '0.75rem' }}>
                             Action Required
@@ -428,19 +432,23 @@ export const GovernmentChallengeReview: React.FC<GovernmentChallengeReviewProps>
                           >
                             ✓ HEI R&D Track
                           </span>
-                        ) : r.recurrence === 'Frequently' || r.recurrence === 'Almost always' ? (
+                        ) : r.ai_analysis?.structured_output?.innovation_decision === 'YES' || r.recurrence === 'Frequently' || r.recurrence === 'Almost always' ? (
                           <span
                             style={{
                               fontSize: '0.72rem',
-                              fontWeight: 600,
+                              fontWeight: 700,
+                              padding: '0.15rem 0.45rem',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'rgba(99, 102, 241, 0.12)',
                               color: 'var(--accent-indigo)',
+                              border: '1px solid rgba(99, 102, 241, 0.25)',
                             }}
                           >
-                            Candidate
+                            AI Candidate
                           </span>
                         ) : (
                           <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                            Standard
+                            Standard ULB
                           </span>
                         )}
                       </td>

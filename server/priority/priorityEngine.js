@@ -210,12 +210,21 @@ export function generateSeverityExplanation({
   const text = `${category} ${description}`.toLowerCase();
   const sevUpper = String(severityLevel || 'MODERATE').toUpperCase();
 
-  // 1. If AI structured analysis already provided ground-truth risk factors, use them directly
+  // 1. If AI structured analysis provided custom severity explanations, use them directly
+  if (aiAnalysis && Array.isArray(aiAnalysis.severity_explanation) && aiAnalysis.severity_explanation.length > 0) {
+    aiAnalysis.severity_explanation.forEach(se => {
+      const clean = String(se).trim();
+      if (clean && !reasons.includes(clean)) {
+        reasons.push(clean.charAt(0).toUpperCase() + clean.slice(1));
+      }
+    });
+  }
+
+  // 1B. If AI structured analysis provided risk factors, append them
   if (aiAnalysis && Array.isArray(aiAnalysis.risk_factors) && aiAnalysis.risk_factors.length > 0) {
     aiAnalysis.risk_factors.slice(0, 3).forEach(rf => {
-      // Capitalize first letter
       const clean = String(rf).trim();
-      if (clean) {
+      if (clean && !reasons.includes(clean)) {
         reasons.push(clean.charAt(0).toUpperCase() + clean.slice(1));
       }
     });

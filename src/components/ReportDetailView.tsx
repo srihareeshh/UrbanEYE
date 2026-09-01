@@ -504,9 +504,10 @@ export const ReportDetailView: React.FC<ReportDetailViewProps> = ({
 
         {/* Severity Classification & "Why this severity?" Explanations */}
         <SeverityExplanation
-          severity={report.priority_breakdown?.severity_level || report.severity || 'Moderate'}
+          severity={report.priority_breakdown?.severity_level || report.ai_analysis?.structured_output?.severity || report.severity || 'Moderate'}
           category={report.category}
-          reasons={report.priority_breakdown?.severity_explanation}
+          reasons={report.priority_breakdown?.severity_explanation || report.ai_analysis?.structured_output?.severity_explanation}
+          reasonSummary={report.ai_analysis?.structured_output?.severity_reason}
           isAiAssessed={report.ai_analysis?.status === 'completed'}
         />
       </div>

@@ -5,6 +5,7 @@ interface SeverityExplanationProps {
   severity: string;
   category?: string;
   reasons?: string[];
+  reasonSummary?: string;
   isAiAssessed?: boolean;
 }
 
@@ -12,6 +13,7 @@ export const SeverityExplanation: React.FC<SeverityExplanationProps> = ({
   severity,
   category = 'General',
   reasons = [],
+  reasonSummary,
   isAiAssessed = false,
 }) => {
   const sevUpper = String(severity || 'MODERATE').toUpperCase();
@@ -94,14 +96,20 @@ export const SeverityExplanation: React.FC<SeverityExplanationProps> = ({
         Why was this severity assigned?
       </div>
 
+      {reasonSummary && (
+        <p style={{ fontSize: '0.78125rem', color: 'var(--text-primary)', lineHeight: 1.45, marginBottom: '0.5rem', fontStyle: 'italic', backgroundColor: 'var(--bg-elevated)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)' }}>
+          "{reasonSummary}"
+        </p>
+      )}
+
       <ul style={{ margin: 0, paddingLeft: '1.2rem', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
         {displayReasons.map((reason, idx) => (
           <li
             key={idx}
             style={{
-              fontSize: '0.8125rem',
-              color: 'var(--text-primary)',
-              lineHeight: 1.5,
+              fontSize: '0.78125rem',
+              color: 'var(--text-secondary)',
+              lineHeight: 1.4,
             }}
           >
             {reason}

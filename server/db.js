@@ -474,6 +474,7 @@ async function initSqliteFallback() {
       recommended_radius_m INTEGER,
       effective_radius_m INTEGER,
       structured_output_json TEXT,
+      government_decision_json TEXT,
       status TEXT DEFAULT 'pending',
       attempt_count INTEGER DEFAULT 0,
       queued_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -818,6 +819,7 @@ export async function initDatabase() {
         recommended_radius_m INTEGER,
         effective_radius_m INTEGER,
         structured_output_json JSONB,
+        government_decision_json JSONB,
         status VARCHAR(50) DEFAULT 'pending',
         attempt_count INTEGER DEFAULT 0,
         queued_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -827,6 +829,8 @@ export async function initDatabase() {
         error_message TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE report_ai_analysis ADD COLUMN IF NOT EXISTS government_decision_json JSONB;
 
       CREATE TABLE IF NOT EXISTS report_priority_scores (
         id TEXT PRIMARY KEY,
