@@ -16,6 +16,9 @@ import { formatISTDateTime } from '../../utils/dateHelper';
 import { GovernmentAIAssessment } from './GovernmentAIAssessment';
 import { getRecommendedHEIsForChallenge } from './governmentPrototypeData';
 import { useGlobalStore } from '../../store/globalStore';
+import { PriorityScoreExplanation } from '../PriorityScoreExplanation';
+import { PriorityFactorList } from '../PriorityFactorList';
+import { SeverityExplanation } from '../SeverityExplanation';
 
 interface GovernmentChallengeDetailProps {
   report: StoredReport;
@@ -372,6 +375,27 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
               {/* 1. AI Advisory Assessment Panel */}
               <GovernmentAIAssessment report={report} />
+
+              {/* 1B. Explainable Priority & Factor Breakdown */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+                <SeverityExplanation
+                  severity={report.priority_breakdown?.severity_level || report.severity}
+                  category={report.category}
+                  reasons={report.priority_breakdown?.severity_explanation || []}
+                  isAiAssessed={report.ai_analysis?.status === 'completed'}
+                />
+                {report.priority_breakdown && (
+                  <>
+                    <PriorityScoreExplanation priority={report.priority_breakdown} category={report.category} />
+                    <PriorityFactorList
+                      factors={report.priority_breakdown.factors}
+                      contributingFactors={report.priority_breakdown.contributing_factors}
+                      weights={report.priority_breakdown.weights}
+                      baseScore={report.priority_breakdown.base_score}
+                    />
+                  </>
+                )}
+              </div>
 
               {/* 2. DUAL DECISION MATRIX: Branch 1 (Gov Action) + Branch 2 (Innovation Routing) */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.25rem' }}>

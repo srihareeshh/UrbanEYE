@@ -327,15 +327,15 @@ function AppContent() {
 
       {/* RENDER STAKEHOLDER VIEWS */}
       {currentRole === 'municipal' ? (
-        <main className="container" style={{ marginTop: '1.5rem', flex: 1, paddingBottom: '2.5rem', overflowY: 'auto' }}>
+        <main style={{ marginTop: '1.25rem', flex: 1, paddingBottom: '2.5rem', width: '100%', maxWidth: '1440px', margin: '1.25rem auto', paddingLeft: '1.25rem', paddingRight: '1.25rem' }}>
           <GovernmentDashboard />
         </main>
       ) : currentRole === 'institution' ? (
-        <main className="container" style={{ marginTop: '1.5rem', flex: 1, paddingBottom: '2.5rem', overflowY: 'auto' }}>
+        <main style={{ marginTop: '1.25rem', flex: 1, paddingBottom: '2.5rem', width: '100%', maxWidth: '1440px', margin: '1.25rem auto', paddingLeft: '1.25rem', paddingRight: '1.25rem' }}>
           <InstitutionDashboard />
         </main>
       ) : currentRole === 'industry' ? (
-        <main className="container" style={{ marginTop: '1.5rem', flex: 1, paddingBottom: '2.5rem', overflowY: 'auto' }}>
+        <main style={{ marginTop: '1.25rem', flex: 1, paddingBottom: '2.5rem', width: '100%', maxWidth: '1440px', margin: '1.25rem auto', paddingLeft: '1.25rem', paddingRight: '1.25rem' }}>
           <IndustryDashboard />
         </main>
       ) : (
