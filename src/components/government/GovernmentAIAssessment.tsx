@@ -15,11 +15,13 @@ import { formatISTDateTime } from '../../utils/dateHelper';
 interface GovernmentAIAssessmentProps {
   report: StoredReport;
   onShowToast?: (msg: string) => void;
+  onDecisionSaved?: (decision: GovernmentAIDecision) => void;
 }
 
 export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
   report,
   onShowToast,
+  onDecisionSaved,
 }) => {
   const { reanalyzeReportWithAI, saveGovernmentAIDecision } = useGlobalStore();
 
@@ -27,19 +29,48 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
   const [showOverrideModal, setShowOverrideModal] = useState(false);
   const [isSubmittingDecision, setIsSubmittingDecision] = useState(false);
 
-  // Form state for government override
-  const [overrideAction, setOverrideAction] = useState<boolean>(true);
-  const [overrideInnovation, setOverrideInnovation] = useState<boolean>(false);
-  const [overrideReason, setOverrideReason] = useState('');
-  const [officerName, setOfficerName] = useState('Municipal Zonal Officer');
+  // Local state for immediate reactive UI updates upon override / confirmation
+  const [localDecision, setLocalDecision] = useState<GovernmentAIDecision | null>(
+    report.ai_analysis?.government_decision || null
+  );
+
+  React.useEffect(() => {
+    setLocalDecision(report.ai_analysis?.government_decision || null);
+  }, [report.ai_analysis?.government_decision]);
 
   const aiAnalysis = report.ai_analysis;
   const structured: StructuredAIAssessment | undefined = aiAnalysis?.structured_output;
-  const governmentDecision: GovernmentAIDecision | null | undefined = aiAnalysis?.government_decision;
+  const governmentDecision: GovernmentAIDecision | null | undefined = localDecision || aiAnalysis?.government_decision;
 
-  // Fallback defaults if structured analysis is still compiling
-  const immediateAction = structured?.immediate_action_decision || (structured?.immediate_action_required ? 'YES' : 'NO');
-  const innovationDecision = structured?.innovation_decision || (structured?.innovation_required ? 'YES' : 'NO');
+  const isOverridden = governmentDecision?.status === 'overridden';
+  const isConfirmed = governmentDecision?.status === 'confirmed';
+
+  // Base raw AI recommendations
+  const rawActionYes = structured?.immediate_action_decision
+    ? structured.immediate_action_decision === 'YES'
+    : (structured ? Boolean(structured.immediate_action_required) : true);
+
+  const rawInnovationYes = structured?.innovation_decision
+    ? structured.innovation_decision === 'YES'
+    : (structured ? Boolean(structured.innovation_required) : false);
+
+  // Effective decisions factoring in official government override
+  const isActionYes = isOverridden
+    ? Boolean(governmentDecision.action_decision)
+    : rawActionYes;
+
+  const isInnovationYes = isOverridden
+    ? Boolean(governmentDecision.innovation_decision)
+    : rawInnovationYes;
+
+  const immediateAction = isActionYes ? 'YES' : 'NO';
+  const innovationDecision = isInnovationYes ? 'YES' : 'NO';
+
+  // Form state for government override
+  const [overrideAction, setOverrideAction] = useState<boolean>(isActionYes);
+  const [overrideInnovation, setOverrideInnovation] = useState<boolean>(isInnovationYes);
+  const [overrideReason, setOverrideReason] = useState(governmentDecision?.override_reason || '');
+  const [officerName, setOfficerName] = useState(governmentDecision?.reviewed_by || 'Municipal Zonal Officer');
 
   const confidenceScore = structured?.confidence
     ? Math.round(structured.confidence * 100)
@@ -47,7 +78,7 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
     ? Math.round(aiAnalysis.evidence_confidence * 100)
     : 92;
 
-  const modelName = aiAnalysis?.model_name || 'gemini-2.5-flash';
+  const modelName = aiAnalysis?.model_name || 'gemini-3.1-flash-lite';
   const generatedAt = aiAnalysis?.completed_at || aiAnalysis?.created_at || report.created_at;
 
   const handleReanalyze = async () => {
@@ -70,15 +101,21 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
   const handleConfirmDecision = async () => {
     setIsSubmittingDecision(true);
     try {
-      const ok = await saveGovernmentAIDecision(report.id, {
-        status: 'confirmed',
-        action_decision: structured?.immediate_action_required ?? true,
-        innovation_decision: structured?.innovation_required ?? false,
+      const decisionPayload = {
+        status: 'confirmed' as const,
+        action_decision: rawActionYes,
+        innovation_decision: rawInnovationYes,
         override_reason: 'Confirmed based on AI decision-support evidence and field validation.',
         reviewed_by: officerName || 'Municipal Zonal Officer',
-      });
-      if (ok && onShowToast) {
-        onShowToast('✓ AI recommendation officially confirmed by Government Authority.');
+        reviewed_at: new Date().toISOString(),
+      };
+      const ok = await saveGovernmentAIDecision(report.id, decisionPayload);
+      if (ok) {
+        setLocalDecision(decisionPayload);
+        if (onDecisionSaved) onDecisionSaved(decisionPayload);
+        if (onShowToast) {
+          onShowToast('✓ AI recommendation officially confirmed by Government Authority.');
+        }
       }
     } catch (err) {
       console.error(err);
@@ -91,14 +128,18 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
     e.preventDefault();
     setIsSubmittingDecision(true);
     try {
-      const ok = await saveGovernmentAIDecision(report.id, {
-        status: 'overridden',
+      const decisionPayload = {
+        status: 'overridden' as const,
         action_decision: overrideAction,
         innovation_decision: overrideInnovation,
         override_reason: overrideReason || 'Standard municipal engineering protocols applied.',
         reviewed_by: officerName || 'Municipal Zonal Officer',
-      });
+        reviewed_at: new Date().toISOString(),
+      };
+      const ok = await saveGovernmentAIDecision(report.id, decisionPayload);
       if (ok) {
+        setLocalDecision(decisionPayload);
+        if (onDecisionSaved) onDecisionSaved(decisionPayload);
         if (onShowToast) onShowToast('✓ Government decision override recorded with official rationale.');
         setShowOverrideModal(false);
       }
@@ -108,10 +149,6 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
       setIsSubmittingDecision(false);
     }
   };
-
-  // Status Colors
-  const isActionYes = immediateAction === 'YES';
-  const isInnovationYes = innovationDecision === 'YES';
 
   const existingSolution = structured?.existing_solution_status || 'UNKNOWN';
   const isSolutionAdequate = existingSolution === 'ADEQUATE';
@@ -245,7 +282,7 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
                 </span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                 <span
                   style={{
                     fontSize: '0.8125rem',
@@ -259,6 +296,60 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
                 >
                   {immediateAction}
                 </span>
+
+                {isOverridden ? (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'rgba(245, 158, 11, 0.22)',
+                      color: 'var(--accent-amber)',
+                      border: '1px solid rgba(245, 158, 11, 0.6)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    <Edit3 size={10} /> Override Decision
+                  </span>
+                ) : isConfirmed ? (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                      color: '#10b981',
+                      border: '1px solid rgba(16, 185, 129, 0.4)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    <Check size={10} /> Confirmed
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      padding: '0.18rem 0.45rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--bg-card)',
+                      color: 'var(--text-muted)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    AI Advisory
+                  </span>
+                )}
+
                 {structured?.urgency && (
                   <span
                     style={{
@@ -338,7 +429,7 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
                 </span>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
                 <span
                   style={{
                     fontSize: '0.8125rem',
@@ -352,19 +443,59 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
                 >
                   {innovationDecision}
                 </span>
-                <span
-                  style={{
-                    fontSize: '0.68rem',
-                    fontWeight: 700,
-                    padding: '0.2rem 0.5rem',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--bg-card)',
-                    color: isInnovationYes ? 'var(--accent-indigo)' : 'var(--text-muted)',
-                    border: '1px solid var(--border-subtle)',
-                  }}
-                >
-                  {isInnovationYes ? 'Innovation Candidate' : 'Standard ULB Method'}
-                </span>
+
+                {isOverridden ? (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'rgba(245, 158, 11, 0.22)',
+                      color: 'var(--accent-amber)',
+                      border: '1px solid rgba(245, 158, 11, 0.6)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.02em',
+                    }}
+                  >
+                    <Edit3 size={10} /> Override Decision
+                  </span>
+                ) : isConfirmed ? (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      padding: '0.18rem 0.5rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                      color: '#10b981',
+                      border: '1px solid rgba(16, 185, 129, 0.4)',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.25rem',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    <Check size={10} /> Confirmed
+                  </span>
+                ) : (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      padding: '0.18rem 0.45rem',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--bg-card)',
+                      color: isInnovationYes ? 'var(--accent-indigo)' : 'var(--text-muted)',
+                      border: '1px solid var(--border-subtle)',
+                    }}
+                  >
+                    {isInnovationYes ? 'Innovation Candidate' : 'Standard ULB Method'}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -537,17 +668,37 @@ export const GovernmentAIAssessment: React.FC<GovernmentAIAssessmentProps> = ({
         </div>
 
         {governmentDecision ? (
-          <div style={{ backgroundColor: 'var(--bg-card)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)', fontSize: '0.78125rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-muted)', fontSize: '0.7rem', marginBottom: '0.25rem' }}>
-              <span>Reviewed by: <strong>{governmentDecision.reviewed_by}</strong></span>
-              <span>{formatISTDateTime(governmentDecision.reviewed_at)}</span>
+          <div
+            style={{
+              backgroundColor: isOverridden ? 'rgba(245, 158, 11, 0.08)' : 'rgba(16, 185, 129, 0.06)',
+              padding: '0.85rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              border: `1px solid ${isOverridden ? 'rgba(245, 158, 11, 0.35)' : 'rgba(16, 185, 129, 0.3)'}`,
+              fontSize: '0.78125rem',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.4rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                {isOverridden ? (
+                  <span style={{ fontWeight: 800, color: 'var(--accent-amber)', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <Edit3 size={13} /> Official Authority Override Active
+                  </span>
+                ) : (
+                  <span style={{ fontWeight: 800, color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                    <Check size={13} /> Official Recommendation Confirmed
+                  </span>
+                )}
+              </div>
+              <div style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                Reviewed by: <strong style={{ color: 'var(--text-primary)' }}>{governmentDecision.reviewed_by}</strong> • {formatISTDateTime(governmentDecision.reviewed_at)}
+              </div>
             </div>
-            <div style={{ color: 'var(--text-primary)' }}>
-              <strong>Official Decision:</strong> Immediate Gov Action = {governmentDecision.action_decision ? 'YES' : 'NO'}, Innovation Pathway = {governmentDecision.innovation_decision ? 'YES' : 'NO'}.
+            <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+              <strong>Effective Binding Decision:</strong> Immediate Gov Action = <span style={{ color: governmentDecision.action_decision ? '#f43f5e' : '#10b981', fontWeight: 800 }}>{governmentDecision.action_decision ? 'YES' : 'NO'}</span>, Innovation Pathway = <span style={{ color: governmentDecision.innovation_decision ? 'var(--accent-indigo)' : '#94a3b8', fontWeight: 800 }}>{governmentDecision.innovation_decision ? 'YES' : 'NO'}</span>
             </div>
             {governmentDecision.override_reason && (
-              <div style={{ color: 'var(--text-secondary)', marginTop: '0.25rem', fontStyle: 'italic' }}>
-                Rationale: "{governmentDecision.override_reason}"
+              <div style={{ color: 'var(--text-secondary)', marginTop: '0.35rem', fontStyle: 'italic', backgroundColor: 'var(--bg-card)', padding: '0.4rem 0.6rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                <strong>Official Rationale:</strong> "{governmentDecision.override_reason}"
               </div>
             )}
           </div>

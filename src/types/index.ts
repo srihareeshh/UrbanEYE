@@ -237,6 +237,7 @@ export interface StructuredAIAssessment {
   urgency_score?: number;
 
   problem_statement: string;
+  underlying_problem?: string;
 
   existing_solution_status: 'ADEQUATE' | 'INSUFFICIENT' | 'UNSUITABLE_LOCALLY' | 'REPEATEDLY_FAILING' | 'UNKNOWN';
   existing_solution_summary: string;

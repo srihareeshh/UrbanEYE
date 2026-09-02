@@ -10,7 +10,7 @@ import {
   Send,
   Upload,
 } from 'lucide-react';
-import type { StoredReport } from '../../types';
+import type { StoredReport, GovernmentAIDecision } from '../../types';
 import { formatBytes } from '../../utils/exifHelper';
 import { formatISTDateTime } from '../../utils/dateHelper';
 import { GovernmentAIAssessment } from './GovernmentAIAssessment';
@@ -74,11 +74,52 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
   // HEI Routing State
   const [selectedHEIIndex, setSelectedHEIIndex] = useState(0);
   const [isEscalatingHEI, setIsEscalatingHEI] = useState(false);
+  const [showManualOverride, setShowManualOverride] = useState(false);
 
   const recommendedHEIs = getRecommendedHEIsForChallenge(report.category, report.description);
   const isAlreadyEscalated = !!report.is_escalated_to_hei || !!report.hei_challenge;
   const isAssigned = !!report.assignment || ['Assigned', 'Action Scheduled', 'In Progress', 'Resolved', 'Citizen Confirmation', 'Confirmed Resolved'].includes(report.status);
   const isResolvedOrPendingCitizen = ['Resolved', 'Citizen Confirmation', 'Confirmed Resolved'].includes(report.status);
+
+  // Local state for immediate reactive UI updates upon override / confirmation
+  const [localGovDecision, setLocalGovDecision] = useState<GovernmentAIDecision | null>(
+    report.ai_analysis?.government_decision || null
+  );
+
+  React.useEffect(() => {
+    setLocalGovDecision(report.ai_analysis?.government_decision || null);
+  }, [report.ai_analysis?.government_decision]);
+
+  // Derive decision pathways from live AI analysis & official government decision
+  const aiStructured = report.ai_analysis?.structured_output;
+  const govDecision = localGovDecision || report.ai_analysis?.government_decision;
+  const isOverridden = govDecision?.status === 'overridden';
+
+  const rawActionYes = aiStructured?.immediate_action_decision
+    ? (aiStructured.immediate_action_decision === 'YES')
+    : (aiStructured ? Boolean(aiStructured.immediate_action_required) : true);
+
+  const rawInnovationYes = aiStructured?.innovation_decision
+    ? (aiStructured.innovation_decision === 'YES')
+    : Boolean(aiStructured?.innovation_required);
+
+  // Effective decisions factoring in official government override
+  const isActionYes = isOverridden
+    ? Boolean(govDecision.action_decision)
+    : rawActionYes;
+
+  const isInnovationYes = isOverridden
+    ? Boolean(govDecision.innovation_decision)
+    : rawInnovationYes;
+
+  // Visibility:
+  // - If Immediate Government Action is YES -> Branch 1 is visible
+  // - If Immediate Government Action is NO -> Branch 1 is NOT visible
+  // - If Innovation / Research Pathway is YES -> Branch 2 is visible
+  // - If Innovation / Research Pathway is NO -> Branch 2 is NOT visible
+  // - If showManualOverride is toggled -> force both branches to show
+  const showBranch1 = isActionYes || showManualOverride;
+  const showBranch2 = isInnovationYes || showManualOverride;
 
   const handleDeptChange = (dept: string) => {
     setSelectedDept(dept);
@@ -374,7 +415,11 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
           {activeTab === 'decision' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
               {/* 1. AI Advisory Assessment Panel */}
-              <GovernmentAIAssessment report={report} onShowToast={onShowToast} />
+              <GovernmentAIAssessment
+                report={report}
+                onShowToast={onShowToast}
+                onDecisionSaved={(decision) => setLocalGovDecision(decision)}
+              />
 
               {/* 1B. Explainable Priority & Factor Breakdown */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -399,279 +444,355 @@ export const GovernmentChallengeDetail: React.FC<GovernmentChallengeDetailProps>
               </div>
 
               {/* 2. DUAL DECISION MATRIX: Branch 1 (Gov Action) + Branch 2 (Innovation Routing) */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '1.25rem' }}>
-                {/* BRANCH 1: IMMEDIATE GOVERNMENT ACTION */}
-                <div
-                  style={{
-                    backgroundColor: 'var(--bg-card)',
-                    border: '1px solid var(--border-medium)',
-                    borderRadius: 'var(--radius-lg)',
-                    padding: '1.25rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.85rem' }}>
-                      <Wrench size={18} color="var(--accent-amber)" />
-                      <span style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
-                        Branch 1: Immediate Government Action
-                      </span>
-                    </div>
-
-                    {isResolvedOrPendingCitizen ? (
-                      <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '0.85rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#10b981', fontWeight: 700, fontSize: '0.8125rem' }}>
-                          <ShieldCheck size={16} />
-                          <span>Remediation Completed by Authority</span>
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
-                          Assigned Dept: {report.assignment?.department_name || 'Municipal Works'}<br />
-                          Resolved by: {report.resolution?.resolved_by || 'Field Supervisor'}<br />
-                          Notes: {report.resolution?.resolution_notes || 'Action completed on site.'}
-                        </div>
-                      </div>
-                    ) : (
-                      <form onSubmit={handleDispatchWorkOrder} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                        <div>
-                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                            Designate Department
-                          </label>
-                          <select
-                            className="input"
-                            style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
-                            value={selectedDept}
-                            onChange={(e) => handleDeptChange(e.target.value)}
-                          >
-                            {DEPARTMENTS.map((d) => (
-                              <option key={d} value={d}>
-                                {d}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
-                          <div>
-                            <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                              Assign Duty Officer
-                            </label>
-                            <input
-                              type="text"
-                              className="input"
-                              style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
-                              value={selectedOfficer}
-                              onChange={(e) => setSelectedOfficer(e.target.value)}
-                            />
-                          </div>
-
-                          <div>
-                            <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                              SLA Target (Hours)
-                            </label>
-                            <select
-                              className="input"
-                              style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
-                              value={targetHours}
-                              onChange={(e) => setTargetHours(Number(e.target.value))}
-                            >
-                              <option value={12}>12 Hours (Emergency Critical)</option>
-                              <option value={24}>24 Hours (High Priority)</option>
-                              <option value={48}>48 Hours (Standard ULB SLA)</option>
-                              <option value={72}>72 Hours (Routine Maintenance)</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-                            Dispatch Instructions & Work Order Scope
-                          </label>
-                          <textarea
-                            className="input"
-                            rows={2}
-                            style={{ width: '100%', fontSize: '0.8125rem', marginTop: '0.2rem' }}
-                            placeholder="Specific instructions for field crew..."
-                            value={actionNotes}
-                            onChange={(e) => setActionNotes(e.target.value)}
-                          />
-                        </div>
-
-                        <button
-                          type="submit"
-                          disabled={isDispatching}
-                          className="btn btn-primary"
-                          style={{ width: '100%', marginTop: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
-                        >
-                          <Send size={14} />
-                          <span>{isDispatching ? 'Issuing Work Order...' : isAssigned ? 'Update Work Order' : 'Dispatch Field Work Order'}</span>
-                        </button>
-                      </form>
-                    )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+                  <div style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Operational Action Pathways
                   </div>
 
-                  {/* Dual Signoff Resolution Upload (when In Progress) */}
-                  {isAssigned && !isResolvedOrPendingCitizen && (
-                    <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px dashed var(--border-medium)' }}>
-                      <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <Upload size={14} />
-                        <span>Complete Remediation & Trigger Citizen Verification</span>
-                      </div>
-                      <form onSubmit={handleDualSignoffSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                        <input
-                          type="text"
-                          className="input"
-                          style={{ width: '100%', height: '34px', fontSize: '0.78125rem' }}
-                          placeholder="Remediation resolution summary..."
-                          value={resolutionNotes}
-                          onChange={(e) => setResolutionNotes(e.target.value)}
-                        />
-                        <input
-                          type="text"
-                          className="input"
-                          style={{ width: '100%', height: '40px', fontSize: '0.78125rem', borderRadius: 'var(--radius-md)' }}
-                          placeholder="Resolved by (e.g., Duty Field Crew)..."
-                          value={resolvedBy}
-                          onChange={(e) => setResolvedBy(e.target.value)}
-                        />
-                        <button
-                          type="submit"
-                          disabled={isResolving}
-                          className="btn btn-secondary btn-sm"
-                          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
-                        >
-                          <ShieldCheck size={14} color="#10b981" />
-                          <span>{isResolving ? 'Submitting Proof...' : 'Upload Repair Proof & Await Citizen Sign-off'}</span>
-                        </button>
-                      </form>
-                    </div>
+                  {(!isOverridden && (showBranch1 !== showBranch2 || (!showBranch1 && !showBranch2))) && (
+                    <button
+                      type="button"
+                      onClick={() => setShowManualOverride(!showManualOverride)}
+                      className="btn btn-secondary btn-sm"
+                      style={{
+                        fontSize: '0.72rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        padding: '0.2rem 0.6rem',
+                      }}
+                    >
+                      <Wrench size={12} />
+                      <span>{showManualOverride ? 'Revert to AI Recommended Pathways' : 'Enable Decision Override (Show All Branches)'}</span>
+                    </button>
                   )}
                 </div>
 
-                {/* BRANCH 2: INNOVATION & RESEARCH ROUTING */}
-                <div
-                  style={{
-                    backgroundColor: 'var(--bg-card)',
-                    border: '1px solid var(--border-medium)',
-                    borderRadius: 'var(--radius-lg)',
-                    padding: '1.25rem',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'space-between',
-                  }}
-                >
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <GraduationCap size={18} color="var(--accent-indigo)" />
-                        <span style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
-                          Branch 2: HEI Innovation Pathway
-                        </span>
-                      </div>
-
-                      {isAlreadyEscalated && (
-                        <span
-                          style={{
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                            padding: '0.15rem 0.5rem',
-                            borderRadius: 'var(--radius-full)',
-                            backgroundColor: 'rgba(99, 102, 241, 0.15)',
-                            color: 'var(--accent-indigo)',
-                          }}
-                        >
-                          ✓ R&D Track Active
-                        </span>
-                      )}
-                    </div>
-
-                    <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', marginBottom: '0.85rem', lineHeight: 1.45 }}>
-                      Ranked academic institutions with verified engineering/scientific capabilities matched to this challenge.
+                {(!showBranch1 && !showBranch2) ? (
+                  <div
+                    style={{
+                      backgroundColor: 'var(--bg-card)',
+                      borderRadius: 'var(--radius-lg)',
+                      padding: '1.5rem',
+                      border: '1px solid var(--border-medium)',
+                      textAlign: 'center',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                    }}
+                  >
+                    <p style={{ fontWeight: 800, color: 'var(--text-primary)', fontSize: '1rem', margin: 0 }}>
+                      Standard Routine Municipal Maintenance
                     </p>
-
-                    {/* Ranked Recommendations List */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginBottom: '0.85rem' }}>
-                      {recommendedHEIs.slice(0, 3).map((rec, idx) => {
-                        const isSelected = selectedHEIIndex === idx;
-                        return (
-                          <div
-                            key={rec.hei.id}
-                            onClick={() => setSelectedHEIIndex(idx)}
-                            style={{
-                              padding: '0.65rem 0.8rem',
-                              borderRadius: 'var(--radius-md)',
-                              border: isSelected ? '1px solid var(--accent-indigo)' : '1px solid var(--border-subtle)',
-                              backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-elevated)',
-                              cursor: 'pointer',
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                                <span className="mono" style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-indigo)' }}>
-                                  #{idx + 1}
-                                </span>
-                                <strong style={{ fontSize: '0.8125rem', color: 'var(--text-primary)' }}>
-                                  {rec.hei.shortName}
-                                </strong>
-                              </div>
-                              <span
-                                className="mono"
-                                style={{
-                                  fontSize: '0.75rem',
-                                  fontWeight: 800,
-                                  color: rec.matchPercentage >= 90 ? '#10b981' : 'var(--accent-indigo)',
-                                }}
-                              >
-                                {rec.matchPercentage}% Match
+                    <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', maxWidth: '560px', margin: 0, lineHeight: 1.5 }}>
+                      AI Assessment indicates neither emergency field intervention nor university R&D is required for this standard grievance. It is scheduled in the standard municipal operational backlog.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setShowManualOverride(true)}
+                      className="btn btn-secondary btn-sm"
+                      style={{ marginTop: '0.25rem' }}
+                    >
+                      Override & Open Action Dispatch
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: (showBranch1 && showBranch2) ? 'repeat(auto-fit, minmax(340px, 1fr))' : '1fr', gap: '1.25rem' }}>
+                    {/* BRANCH 1: IMMEDIATE GOVERNMENT ACTION */}
+                    {showBranch1 && (
+                      <div
+                        style={{
+                          backgroundColor: 'var(--bg-card)',
+                          border: `1px solid ${isOverridden ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-medium)'}`,
+                          borderRadius: 'var(--radius-lg)',
+                          padding: '1.25rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <Wrench size={18} color="var(--accent-amber)" />
+                              <span style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
+                                Branch 1: Immediate Government Action
                               </span>
                             </div>
 
-                            <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
-                              Dept: {rec.relevantDepartment}
-                            </div>
-                            <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
-                              {rec.reason}
-                            </div>
+                            {isOverridden && (
+                              <span style={{ fontSize: '0.68rem', fontWeight: 800, padding: '0.15rem 0.45rem', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(245, 158, 11, 0.18)', color: 'var(--accent-amber)', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
+                                Authority Override Active
+                              </span>
+                            )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  </div>
 
-                  <div>
-                    {isAlreadyEscalated ? (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
-                        This challenge has been routed to the Higher Education Innovation Exchange.
+                          {isResolvedOrPendingCitizen ? (
+                            <div style={{ backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)', padding: '0.85rem', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#10b981', fontWeight: 700, fontSize: '0.8125rem' }}>
+                                <ShieldCheck size={16} />
+                                <span>Remediation Completed by Authority</span>
+                              </div>
+                              <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
+                                Assigned Dept: {report.assignment?.department_name || 'Municipal Works'}<br />
+                                Resolved by: {report.resolution?.resolved_by || 'Field Supervisor'}<br />
+                                Notes: {report.resolution?.resolution_notes || 'Action completed on site.'}
+                              </div>
+                            </div>
+                          ) : (
+                            <form onSubmit={handleDispatchWorkOrder} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                              <div>
+                                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                  Designate Department
+                                </label>
+                                <select
+                                  className="input"
+                                  style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
+                                  value={selectedDept}
+                                  onChange={(e) => handleDeptChange(e.target.value)}
+                                >
+                                  {DEPARTMENTS.map((d) => (
+                                    <option key={d} value={d}>
+                                      {d}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem' }}>
+                                <div>
+                                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                    Assign Duty Officer
+                                  </label>
+                                  <input
+                                    type="text"
+                                    className="input"
+                                    style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
+                                    value={selectedOfficer}
+                                    onChange={(e) => setSelectedOfficer(e.target.value)}
+                                  />
+                                </div>
+
+                                <div>
+                                  <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                    SLA Target (Hours)
+                                  </label>
+                                  <select
+                                    className="input"
+                                    style={{ width: '100%', height: '40px', fontSize: '0.8125rem', marginTop: '0.2rem', borderRadius: 'var(--radius-md)' }}
+                                    value={targetHours}
+                                    onChange={(e) => setTargetHours(Number(e.target.value))}
+                                  >
+                                    <option value={12}>12 Hours (Emergency Critical)</option>
+                                    <option value={24}>24 Hours (High Priority)</option>
+                                    <option value={48}>48 Hours (Standard ULB SLA)</option>
+                                    <option value={72}>72 Hours (Routine Maintenance)</option>
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div>
+                                <label style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                                  Dispatch Instructions & Work Order Scope
+                                </label>
+                                <textarea
+                                  className="input"
+                                  rows={2}
+                                  style={{ width: '100%', fontSize: '0.8125rem', marginTop: '0.2rem' }}
+                                  placeholder="Specific instructions for field crew..."
+                                  value={actionNotes}
+                                  onChange={(e) => setActionNotes(e.target.value)}
+                                />
+                              </div>
+
+                              <button
+                                type="submit"
+                                disabled={isDispatching}
+                                className="btn btn-primary"
+                                style={{ width: '100%', marginTop: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}
+                              >
+                                <Send size={14} />
+                                <span>{isDispatching ? 'Issuing Work Order...' : isAssigned ? 'Update Work Order' : 'Dispatch Field Work Order'}</span>
+                              </button>
+                            </form>
+                          )}
+                        </div>
+
+                        {/* Dual Signoff Resolution Upload (when In Progress) */}
+                        {isAssigned && !isResolvedOrPendingCitizen && (
+                          <div style={{ marginTop: '1rem', paddingTop: '0.85rem', borderTop: '1px dashed var(--border-medium)' }}>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-amber)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              <Upload size={14} />
+                              <span>Complete Remediation & Trigger Citizen Verification</span>
+                            </div>
+                            <form onSubmit={handleDualSignoffSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              <input
+                                type="text"
+                                className="input"
+                                style={{ width: '100%', height: '34px', fontSize: '0.78125rem' }}
+                                placeholder="Remediation resolution summary..."
+                                value={resolutionNotes}
+                                onChange={(e) => setResolutionNotes(e.target.value)}
+                              />
+                              <input
+                                type="text"
+                                className="input"
+                                style={{ width: '100%', height: '40px', fontSize: '0.78125rem', borderRadius: 'var(--radius-md)' }}
+                                placeholder="Resolved by (e.g., Duty Field Crew)..."
+                                value={resolvedBy}
+                                onChange={(e) => setResolvedBy(e.target.value)}
+                              />
+                              <button
+                                type="submit"
+                                disabled={isResolving}
+                                className="btn btn-secondary btn-sm"
+                                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem' }}
+                              >
+                                <ShieldCheck size={14} color="#10b981" />
+                                <span>{isResolving ? 'Submitting Proof...' : 'Upload Repair Proof & Await Citizen Sign-off'}</span>
+                              </button>
+                            </form>
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleRouteToHEI}
-                        disabled={isEscalatingHEI}
-                        className="btn btn-secondary"
+                    )}
+
+                    {/* BRANCH 2: HEI INNOVATION PATHWAY */}
+                    {showBranch2 && (
+                      <div
                         style={{
-                          width: '100%',
+                          backgroundColor: 'var(--bg-card)',
+                          border: `1px solid ${isOverridden ? 'rgba(245, 158, 11, 0.4)' : 'var(--border-medium)'}`,
+                          borderRadius: 'var(--radius-lg)',
+                          padding: '1.25rem',
                           display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: '0.4rem',
-                          backgroundColor: 'rgba(99, 102, 241, 0.12)',
-                          color: 'var(--accent-indigo)',
-                          border: '1px solid rgba(99, 102, 241, 0.35)',
+                          flexDirection: 'column',
+                          justifyContent: 'space-between',
                         }}
                       >
-                        <GraduationCap size={15} />
-                        <span>
-                          {isEscalatingHEI
-                            ? 'Routing to University...'
-                            : `Route Challenge to ${recommendedHEIs[selectedHEIIndex]?.hei.shortName || 'University'}`}
-                        </span>
-                      </button>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.85rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <GraduationCap size={18} color="var(--accent-indigo)" />
+                              <span style={{ fontWeight: 800, fontSize: '0.9375rem', color: 'var(--text-primary)' }}>
+                                Branch 2: HEI Innovation Pathway
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                              {isOverridden && (
+                                <span style={{ fontSize: '0.68rem', fontWeight: 800, padding: '0.15rem 0.45rem', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(245, 158, 11, 0.18)', color: 'var(--accent-amber)', border: '1px solid rgba(245, 158, 11, 0.4)' }}>
+                                  Authority Override Active
+                                </span>
+                              )}
+                              {isAlreadyEscalated && (
+                                <span
+                                  style={{
+                                    fontSize: '0.7rem',
+                                    fontWeight: 700,
+                                    padding: '0.15rem 0.5rem',
+                                    borderRadius: 'var(--radius-full)',
+                                    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+                                    color: 'var(--accent-indigo)',
+                                  }}
+                                >
+                                  ✓ R&D Track Active
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <p style={{ fontSize: '0.78125rem', color: 'var(--text-secondary)', marginBottom: '0.85rem', lineHeight: 1.45 }}>
+                            Ranked academic institutions with verified engineering/scientific capabilities matched to this challenge.
+                          </p>
+
+                          {/* Ranked Recommendations List */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.55rem', marginBottom: '0.85rem' }}>
+                            {recommendedHEIs.slice(0, 3).map((rec, idx) => {
+                              const isSelected = selectedHEIIndex === idx;
+                              return (
+                                <div
+                                  key={rec.hei.id}
+                                  onClick={() => setSelectedHEIIndex(idx)}
+                                  style={{
+                                    padding: '0.65rem 0.8rem',
+                                    borderRadius: 'var(--radius-md)',
+                                    border: isSelected ? '1px solid var(--accent-indigo)' : '1px solid var(--border-subtle)',
+                                    backgroundColor: isSelected ? 'rgba(99, 102, 241, 0.1)' : 'var(--bg-elevated)',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                >
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                      <span className="mono" style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-indigo)' }}>
+                                        #{idx + 1}
+                                      </span>
+                                      <strong style={{ fontSize: '0.8125rem', color: 'var(--text-primary)' }}>
+                                        {rec.hei.shortName}
+                                      </strong>
+                                    </div>
+                                    <span
+                                      className="mono"
+                                      style={{
+                                        fontSize: '0.75rem',
+                                        fontWeight: 800,
+                                        color: rec.matchPercentage >= 90 ? '#10b981' : 'var(--accent-indigo)',
+                                      }}
+                                    >
+                                      {rec.matchPercentage}% Match
+                                    </span>
+                                  </div>
+
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                                    Dept: {rec.relevantDepartment}
+                                  </div>
+                                  <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                                    {rec.reason}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div>
+                          {isAlreadyEscalated ? (
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic', textAlign: 'center' }}>
+                              This challenge has been routed to the Higher Education Innovation Exchange.
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={handleRouteToHEI}
+                              disabled={isEscalatingHEI}
+                              className="btn btn-secondary"
+                              style={{
+                                width: '100%',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: '0.4rem',
+                                backgroundColor: 'rgba(99, 102, 241, 0.12)',
+                                color: 'var(--accent-indigo)',
+                                border: '1px solid rgba(99, 102, 241, 0.35)',
+                              }}
+                            >
+                              <GraduationCap size={15} />
+                              <span>
+                                {isEscalatingHEI
+                                  ? 'Routing to University...'
+                                  : `Route Challenge to ${recommendedHEIs[selectedHEIIndex]?.hei.shortName || 'University'}`}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     )}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           )}

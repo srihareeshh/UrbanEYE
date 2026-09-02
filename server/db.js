@@ -167,6 +167,9 @@ async function initSqliteFallback() {
   try {
     sqliteDb.exec(`ALTER TABLE reports ADD COLUMN embedding TEXT;`);
   } catch (e) {}
+  try {
+    sqliteDb.exec(`ALTER TABLE report_ai_analysis ADD COLUMN government_decision_json TEXT;`);
+  } catch (e) {}
 
   sqliteDb.exec(`
     CREATE TABLE IF NOT EXISTS users (
