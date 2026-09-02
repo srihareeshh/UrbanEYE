@@ -39,6 +39,73 @@ export interface StudentResearcher {
   role: string;
 }
 
+export type HEIPerspective = 'nodal' | 'faculty';
+
+export interface PerspectivePermissions {
+  canReviewMatchedChallenges: boolean;
+  canAcceptChallenge: boolean;
+  canDeclineChallenge: boolean;
+  canAssignFaculty: boolean;
+  canReviewProposals: boolean;
+  canApproveProposal: boolean;
+  canViewInstitutionProjects: boolean;
+  canViewInstitutionAnalytics: boolean;
+  canReviewAssignedChallenges: boolean;
+  canPerformFeasibility: boolean;
+  canCreateResearchTeam: boolean;
+  canCreateProposal: boolean;
+  canSubmitProposal: boolean;
+  canViewOwnProjects: boolean;
+  canManageInstitutionCapabilities: boolean;
+}
+
+export function getPerspectivePermissions(perspective: HEIPerspective): PerspectivePermissions {
+  if (perspective === 'nodal') {
+    return {
+      canReviewMatchedChallenges: true,
+      canAcceptChallenge: true,
+      canDeclineChallenge: true,
+      canAssignFaculty: true,
+      canReviewProposals: true,
+      canApproveProposal: true,
+      canViewInstitutionProjects: true,
+      canViewInstitutionAnalytics: true,
+      canReviewAssignedChallenges: false,
+      canPerformFeasibility: false,
+      canCreateResearchTeam: false,
+      canCreateProposal: false,
+      canSubmitProposal: false,
+      canViewOwnProjects: false,
+      canManageInstitutionCapabilities: true,
+    };
+  }
+  return {
+    canReviewMatchedChallenges: false,
+    canAcceptChallenge: false,
+    canDeclineChallenge: false,
+    canAssignFaculty: false,
+    canReviewProposals: false,
+    canApproveProposal: false,
+    canViewInstitutionProjects: false,
+    canViewInstitutionAnalytics: false,
+    canReviewAssignedChallenges: true,
+    canPerformFeasibility: true,
+    canCreateResearchTeam: true,
+    canCreateProposal: true,
+    canSubmitProposal: true,
+    canViewOwnProjects: true,
+    canManageInstitutionCapabilities: false,
+  };
+}
+
+export const NODAL_OFFICER_IDENTITY = {
+  id: 'nodal_lead',
+  name: 'Dr. Institutional Innovation Coordinator',
+  designation: 'Head, Innovation & Incubation Cell (IIC)',
+  department: 'Central Innovation & Incubation Cell',
+  institution: 'BIT Mesra',
+};
+
 export type HEIWorkflowStatus =
   | 'MATCHED'
   | 'UNDER_HEI_REVIEW'

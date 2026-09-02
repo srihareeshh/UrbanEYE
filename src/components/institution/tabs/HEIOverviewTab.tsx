@@ -10,7 +10,6 @@ import {
   MapPin,
   Building2,
   Award,
-  Users,
   FlaskConical,
 } from 'lucide-react';
 import type { StoredReport, HEIChallenge, HEIProject } from '../../../types';
@@ -53,7 +52,6 @@ export const HEIOverviewTab: React.FC<HEIOverviewTabProps> = ({
   const matchedChallengesCount = heiChallenges.length || reports.filter((r) => r.is_escalated_to_hei || r.ai_analysis?.structured_output?.innovation_required).length || 4;
   const awaitingReviewChallenges = heiChallenges.filter((c) => c.status === 'open');
   const underEvaluationCount = evaluatedChallenges.length;
-  const teamFormingCount = evaluatedChallenges.filter((e) => e.status === 'TEAM_FORMING').length || 1;
   const pendingProposalsCount = proposals.filter((p) => p.status === 'submitted' || p.status === 'under_evaluation').length || 1;
   const activeProjectsCount = heiProjects.filter((p) => p.status === 'active' || p.status === 'pilot_ready').length || 2;
   const prototypeCount = prototypes.length || 2;
@@ -64,14 +62,13 @@ export const HEIOverviewTab: React.FC<HEIOverviewTabProps> = ({
   const totalFundingPledged = heiProjects.reduce((acc, p) => acc + (p.funding_pledged || 0), 0) + 550000;
 
   const pipelineStages = [
-    { label: 'Awaiting HEI Review', count: awaitingReviewChallenges.length, tab: 'challenges', color: 'var(--accent-indigo)', icon: Sparkles },
-    { label: 'Faculty Evaluation', count: underEvaluationCount, tab: 'evaluation', color: 'var(--accent-amber)', icon: FlaskConical },
-    { label: 'Team Formation', count: teamFormingCount, tab: 'evaluation', color: '#38bdf8', icon: Users },
-    { label: 'Proposal Stage', count: pendingProposalsCount, tab: 'proposals', color: 'var(--accent-amber)', icon: FileText },
+    { label: 'Matched Challenges', count: awaitingReviewChallenges.length, tab: 'matched_challenges', color: 'var(--accent-indigo)', icon: Sparkles },
+    { label: 'Faculty Assignment', count: underEvaluationCount, tab: 'accepted_assignment', color: 'var(--accent-amber)', icon: FlaskConical },
+    { label: 'Proposals Stage', count: pendingProposalsCount, tab: 'proposals', color: 'var(--accent-amber)', icon: FileText },
     { label: 'Active Projects', count: activeProjectsCount, tab: 'projects', color: '#10b981', icon: FolderGit2 },
-    { label: 'Prototypes Built', count: prototypeCount, tab: 'prototype', color: '#818cf8', icon: Cpu },
-    { label: 'Community Pilots', count: activePilotsCount, tab: 'pilots', color: '#38bdf8', icon: Compass },
-    { label: 'Impact Measured', count: completedImpactCount, tab: 'impact', color: '#10b981', icon: BarChart3 },
+    { label: 'Prototypes Built', count: prototypeCount, tab: 'projects', color: '#818cf8', icon: Cpu },
+    { label: 'Community Pilots', count: activePilotsCount, tab: 'projects', color: '#38bdf8', icon: Compass },
+    { label: 'Impact & Outcomes', count: completedImpactCount, tab: 'analytics', color: '#10b981', icon: BarChart3 },
   ];
 
   return (
@@ -136,7 +133,7 @@ export const HEIOverviewTab: React.FC<HEIOverviewTabProps> = ({
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
           <button
             type="button"
-            onClick={() => onNavigateTab('challenges')}
+            onClick={() => onNavigateTab('matched_challenges')}
             className="btn btn-primary btn-sm"
             style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}
           >
@@ -264,7 +261,7 @@ export const HEIOverviewTab: React.FC<HEIOverviewTabProps> = ({
 
           <button
             type="button"
-            onClick={() => onNavigateTab('challenges')}
+            onClick={() => onNavigateTab('matched_challenges')}
             className="btn btn-ghost btn-sm"
             style={{ fontSize: '0.78125rem', color: 'var(--accent-indigo)' }}
           >

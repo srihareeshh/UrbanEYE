@@ -7,19 +7,20 @@ import {
 } from 'lucide-react';
 import { useGlobalStore } from '../../store/globalStore';
 import type { StoredReport, HEIChallenge, HEIProject, ProjectMilestone, NEPCreditRecord } from '../../types';
-import { HEISidebar, type HEITab } from './HEISidebar';
+import { HEISidebar, type HEISidebarTab } from './HEISidebar';
 import { HEIOverviewTab } from './tabs/HEIOverviewTab';
 import { HEIChallengesTab } from './tabs/HEIChallengesTab';
-import { HEIEvaluationTab } from './tabs/HEIEvaluationTab';
-import { HEICapabilitiesTab } from './tabs/HEICapabilitiesTab';
-import { HEIFacultyTeamsTab } from './tabs/HEIFacultyTeamsTab';
+import { HEIAcceptedAssignmentTab } from './tabs/HEIAcceptedAssignmentTab';
 import { HEIProposalsTab } from './tabs/HEIProposalsTab';
 import { HEIActiveProjectsTab } from './tabs/HEIActiveProjectsTab';
-import { HEIMilestonesTab } from './tabs/HEIMilestonesTab';
-import { HEIPrototypeTab } from './tabs/HEIPrototypeTab';
-import { HEIIndustryTab } from './tabs/HEIIndustryTab';
-import { HEIPilotsTab } from './tabs/HEIPilotsTab';
-import { HEIImpactTab } from './tabs/HEIImpactTab';
+import { HEICapabilitiesTab } from './tabs/HEICapabilitiesTab';
+import { HEIAnalyticsTab } from './tabs/HEIAnalyticsTab';
+import { HEIFacultyWorkbenchTab } from './tabs/HEIFacultyWorkbenchTab';
+import { HEIFacultyAssignedChallengesTab } from './tabs/HEIFacultyAssignedChallengesTab';
+import { HEIFeasibilityTab } from './tabs/HEIFeasibilityTab';
+import { HEIResearchTeamsTab } from './tabs/HEIResearchTeamsTab';
+import { HEIFacultyProjectsTab } from './tabs/HEIFacultyProjectsTab';
+import { ProjectDetailModal } from './ProjectDetailModal';
 import { HEIChallengeDetailModal } from './HEIChallengeDetailModal';
 import { HEIProposalModal } from './HEIProposalModal';
 import { ClaimChallengeModal } from './ClaimChallengeModal';
@@ -32,25 +33,20 @@ import {
   SEED_EVALUATED_CHALLENGES,
   SEED_PROPOSALS,
   SEED_PROTOTYPES,
-  SEED_INDUSTRY_COLLABS,
   SEED_IMPACT_OUTCOMES,
   type ResearchProposal,
-  type PrototypeRecord,
-  type ImpactOutcomeRecord,
   type EvaluatedChallenge,
   type FacultyMember,
   type StudentResearcher,
   type FeasibilityDecision,
+  type HEIPerspective,
 } from './heiDataModel';
-
-export type HEIPerspective = 'nodal' | 'faculty';
 
 export const InstitutionDashboard: React.FC = () => {
   const {
     reports,
     heiChallenges,
     heiProjects,
-    nepCredits,
     claimChallenge,
     updateMilestone,
     generateNEPCertificate,
@@ -58,17 +54,18 @@ export const InstitutionDashboard: React.FC = () => {
     isLoading,
   } = useGlobalStore();
 
-  const [activeTab, setActiveTab] = useState<HEITab>('overview');
-  const [activePerspective, setActivePerspective] = useState<HEIPerspective>('nodal');
+  // Perspective & Navigation State
+  const [perspective, setPerspective] = useState<HEIPerspective>('nodal');
+  const [activeFacultyId, setActiveFacultyId] = useState<string>(SEED_FACULTY[0].id);
+  const [activeTab, setActiveTab] = useState<HEISidebarTab>('overview');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
-  // Prototype state lists
+  // Prototype Data Lists
   const [evaluatedChallenges, setEvaluatedChallenges] = useState<EvaluatedChallenge[]>(SEED_EVALUATED_CHALLENGES);
   const [proposals, setProposals] = useState<ResearchProposal[]>(SEED_PROPOSALS);
-  const [prototypes] = useState<PrototypeRecord[]>(SEED_PROTOTYPES);
-  const [impactRecords] = useState<ImpactOutcomeRecord[]>(SEED_IMPACT_OUTCOMES);
 
-  // Modals state
+  // Modals State
+  const [selectedProjectForDetail, setSelectedProjectForDetail] = useState<HEIProject | null>(null);
   const [selectedChallengeForDetail, setSelectedChallengeForDetail] = useState<StoredReport | HEIChallenge | null>(null);
   const [claimTargetChallenge, setClaimTargetChallenge] = useState<HEIChallenge | null>(null);
   const [proposalTargetChallenge, setProposalTargetChallenge] = useState<HEIChallenge | null>(null);
@@ -77,15 +74,28 @@ export const InstitutionDashboard: React.FC = () => {
   const [viewCertificate, setViewCertificate] = useState<NEPCreditRecord | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  const activeFaculty = SEED_FACULTY.find((f) => f.id === activeFacultyId) || SEED_FACULTY[0];
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
   };
 
-  // Handlers for Nodal & Faculty Workflows
+  // Role Switcher Handler
+  const handlePerspectiveChange = (newPerspective: HEIPerspective) => {
+    setPerspective(newPerspective);
+    if (newPerspective === 'nodal') {
+      setActiveTab('overview');
+    } else {
+      setActiveTab('workbench');
+    }
+    showToast(`Switched to ${newPerspective === 'nodal' ? 'HEI Nodal Officer (Institution-Wide)' : 'Faculty Research Lead'} Perspective`);
+  };
+
+  // Nodal Handlers
   const handleAcceptEvaluation = (
     challenge: HEIChallenge,
-    assignedDept: string = 'Civil & Environmental Engineering',
+    assignedDept: string = ACTIVE_INSTITUTION.departments[0],
     faculty: FacultyMember = SEED_FACULTY[0]
   ) => {
     const newEvaluated: EvaluatedChallenge = {
@@ -104,9 +114,9 @@ export const InstitutionDashboard: React.FC = () => {
       },
       facultyEvaluation: {
         feasibility: 'FEASIBLE',
-        technicalNotes: `Routed by Nodal Officer to ${faculty.name} (${assignedDept}). Initial feasibility evaluation in progress.`,
+        technicalNotes: `Accepted by Nodal Officer and routed to ${faculty.name} (${assignedDept}).`,
         evaluatedAt: new Date().toISOString(),
-        requiredResources: ['Prototyping Facility', 'Sensor Mesh Test Kit'],
+        requiredResources: ['Prototyping Workshop', 'Sensor Mesh Test Kit'],
       },
       teamFormation: {
         teamStatus: 'Forming',
@@ -119,13 +129,66 @@ export const InstitutionDashboard: React.FC = () => {
 
     setEvaluatedChallenges([newEvaluated, ...evaluatedChallenges]);
     showToast(`Challenge ${challenge.report_code || challenge.id} accepted by Nodal Officer and routed to ${faculty.name}.`);
-    setActiveTab('evaluation');
+    if (perspective === 'nodal') {
+      setActiveTab('accepted_assignment');
+    }
   };
 
   const handleDeclineChallenge = (challenge: HEIChallenge, reason?: string) => {
     showToast(`Challenge ${challenge.report_code || challenge.id} declined: ${reason || 'Capacity constraint recorded.'}`);
   };
 
+  const handleAssignFaculty = (challengeId: string, assignedDept: string, faculty: FacultyMember) => {
+    setEvaluatedChallenges(
+      evaluatedChallenges.map((ec) =>
+        ec.id === challengeId
+          ? {
+              ...ec,
+              status: 'FACULTY_EVALUATION',
+              nodalDecision: {
+                ...ec.nodalDecision,
+                assignedDepartment: assignedDept,
+                assignedFaculty: faculty,
+              },
+            }
+          : ec
+      )
+    );
+    showToast(`Assigned ${faculty.name} (${assignedDept}) as Faculty Lead.`);
+  };
+
+  const handleApproveProposal = (proposalId: string) => {
+    setProposals(
+      proposals.map((p) =>
+        p.id === proposalId
+          ? {
+              ...p,
+              status: 'approved',
+              approvedAt: new Date().toISOString(),
+              reviewerNotes: 'Approved by Nodal Innovation Board for Capstone Project Activation.',
+            }
+          : p
+      )
+    );
+    showToast(`Proposal approved! Active project initiated.`);
+  };
+
+  const handleRequestRevision = (proposalId: string, notes: string) => {
+    setProposals(
+      proposals.map((p) =>
+        p.id === proposalId
+          ? {
+              ...p,
+              status: 'under_evaluation',
+              reviewerNotes: `Revision requested: ${notes}`,
+            }
+          : p
+      )
+    );
+    showToast(`Revision request sent to faculty lead.`);
+  };
+
+  // Faculty Handlers
   const handleUpdateFeasibility = (challengeId: string, decision: FeasibilityDecision, notes: string) => {
     setEvaluatedChallenges(
       evaluatedChallenges.map((ec) =>
@@ -143,7 +206,7 @@ export const InstitutionDashboard: React.FC = () => {
           : ec
       )
     );
-    showToast(`Faculty feasibility updated: ${decision.replace(/_/g, ' ')}`);
+    showToast(`Feasibility saved: ${decision.replace(/_/g, ' ')}`);
   };
 
   const handleAddStudentToTeam = (challengeId: string, student: StudentResearcher) => {
@@ -151,9 +214,7 @@ export const InstitutionDashboard: React.FC = () => {
       evaluatedChallenges.map((ec) => {
         if (ec.id !== challengeId) return ec;
         const currentMembers = ec.teamFormation?.studentMembers || [];
-        if (currentMembers.some((s) => s.id === student.id)) {
-          return ec;
-        }
+        if (currentMembers.some((s) => s.id === student.id)) return ec;
         return {
           ...ec,
           teamFormation: {
@@ -164,7 +225,7 @@ export const InstitutionDashboard: React.FC = () => {
         };
       })
     );
-    showToast(`Student researcher ${student.name} (${student.apaarId}) added to research team.`);
+    showToast(`Student ${student.name} (${student.apaarId}) added to research team.`);
   };
 
   const handleDraftProposal = (challenge: HEIChallenge | EvaluatedChallenge) => {
@@ -191,7 +252,7 @@ export const InstitutionDashboard: React.FC = () => {
 
   const handleProposalSubmit = (newProposal: ResearchProposal) => {
     setProposals([newProposal, ...proposals]);
-    showToast(`Research Proposal "${newProposal.title}" submitted to Faculty Board.`);
+    showToast(`Proposal "${newProposal.title}" submitted to Nodal Board.`);
     setActiveTab('proposals');
   };
 
@@ -236,13 +297,27 @@ export const InstitutionDashboard: React.FC = () => {
     }
   };
 
+  // Filtered Datasets by Active Role Perspective
+  const assignedChallengesForFaculty = evaluatedChallenges.filter(
+    (e) => e.nodalDecision.assignedFaculty.id === activeFacultyId
+  );
+  const proposalsForFaculty = proposals.filter(
+    (p) => p.facultyLead.id === activeFacultyId
+  );
+  const projectsForFaculty = heiProjects.filter((p) => {
+    const leadLower = (p.faculty_lead || '').toLowerCase();
+    const facNameLower = activeFaculty.name.toLowerCase();
+    return leadLower === facNameLower || leadLower.includes(facNameLower.split(' ')[1]);
+  });
+
   const counts = {
     matchedChallenges: heiChallenges.length,
-    underEvaluation: evaluatedChallenges.length,
-    activeProjects: heiProjects.length,
+    unassignedAccepted: evaluatedChallenges.filter((e) => e.status === 'ACCEPTED_FOR_EVALUATION').length,
     pendingProposals: proposals.filter((p) => p.status === 'submitted' || p.status === 'under_evaluation').length,
-    activePilots: 2,
-    completedImpact: impactRecords.length,
+    institutionProjects: heiProjects.length,
+    assignedChallenges: assignedChallengesForFaculty.length,
+    pendingFeasibility: assignedChallengesForFaculty.filter((c) => c.status === 'FACULTY_EVALUATION').length,
+    facultyProjects: projectsForFaculty.length,
   };
 
   return (
@@ -256,7 +331,7 @@ export const InstitutionDashboard: React.FC = () => {
             right: '24px',
             zIndex: 2000,
             backgroundColor: 'var(--bg-elevated)',
-            border: '1px solid var(--accent-indigo)',
+            border: `1px solid ${perspective === 'nodal' ? 'var(--accent-indigo)' : 'var(--accent-amber)'}`,
             boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
             borderRadius: 'var(--radius-md)',
             padding: '0.85rem 1.4rem',
@@ -269,13 +344,14 @@ export const InstitutionDashboard: React.FC = () => {
             animation: 'slideUp 0.2s ease-out',
           }}
         >
-          <Sparkles size={17} color="var(--accent-indigo)" />
+          <Sparkles size={17} color={perspective === 'nodal' ? 'var(--accent-indigo)' : 'var(--accent-amber)'} />
           <span>{toastMessage}</span>
         </div>
       )}
 
-      {/* 1. Left Sidebar Navigation */}
+      {/* 1. Left Sidebar Navigation (Role-Aware) */}
       <HEISidebar
+        perspective={perspective}
         activeTab={activeTab}
         onTabChange={setActiveTab}
         isCollapsed={isSidebarCollapsed}
@@ -285,7 +361,7 @@ export const InstitutionDashboard: React.FC = () => {
 
       {/* 2. Main Content Area */}
       <main style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-        {/* Top Perspective Switcher & Sync Status Bar */}
+        {/* Top Perspective Switcher Bar */}
         <div
           style={{
             backgroundColor: 'var(--bg-card)',
@@ -299,11 +375,12 @@ export const InstitutionDashboard: React.FC = () => {
             gap: '0.75rem',
           }}
         >
-          {/* Active Perspective Toggle (Nodal Officer vs Faculty Lead) */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-              Active Perspective:
+          {/* Prototype Role Perspective Switcher */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Prototype Perspective:
             </span>
+
             <div
               style={{
                 backgroundColor: 'var(--bg-elevated)',
@@ -317,46 +394,67 @@ export const InstitutionDashboard: React.FC = () => {
             >
               <button
                 type="button"
-                onClick={() => setActivePerspective('nodal')}
+                onClick={() => handlePerspectiveChange('nodal')}
                 style={{
-                  padding: '0.3rem 0.75rem',
+                  padding: '0.35rem 0.85rem',
                   borderRadius: 'var(--radius-full)',
-                  backgroundColor: activePerspective === 'nodal' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-                  color: activePerspective === 'nodal' ? 'var(--accent-indigo)' : 'var(--text-secondary)',
-                  border: activePerspective === 'nodal' ? '1px solid rgba(99, 102, 241, 0.4)' : '1px solid transparent',
-                  fontSize: '0.75rem',
+                  backgroundColor: perspective === 'nodal' ? 'rgba(99, 102, 241, 0.25)' : 'transparent',
+                  color: perspective === 'nodal' ? 'var(--accent-indigo)' : 'var(--text-secondary)',
+                  border: perspective === 'nodal' ? '1px solid rgba(99, 102, 241, 0.45)' : '1px solid transparent',
+                  fontSize: '0.78125rem',
                   fontWeight: 800,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.35rem',
+                  transition: 'all 0.15s ease',
                 }}
               >
-                <Building2 size={13} />
-                <span>Nodal Officer / Innovation Cell</span>
+                <Building2 size={14} />
+                <span>HEI Nodal Officer</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setActivePerspective('faculty')}
+                onClick={() => handlePerspectiveChange('faculty')}
                 style={{
-                  padding: '0.3rem 0.75rem',
+                  padding: '0.35rem 0.85rem',
                   borderRadius: 'var(--radius-full)',
-                  backgroundColor: activePerspective === 'faculty' ? 'rgba(245, 158, 11, 0.2)' : 'transparent',
-                  color: activePerspective === 'faculty' ? 'var(--accent-amber)' : 'var(--text-secondary)',
-                  border: activePerspective === 'faculty' ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid transparent',
-                  fontSize: '0.75rem',
+                  backgroundColor: perspective === 'faculty' ? 'rgba(245, 158, 11, 0.25)' : 'transparent',
+                  color: perspective === 'faculty' ? 'var(--accent-amber)' : 'var(--text-secondary)',
+                  border: perspective === 'faculty' ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid transparent',
+                  fontSize: '0.78125rem',
                   fontWeight: 800,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.35rem',
+                  transition: 'all 0.15s ease',
                 }}
               >
-                <GraduationCap size={13} />
+                <GraduationCap size={14} />
                 <span>Faculty / Research Lead</span>
               </button>
             </div>
+
+            {/* If Faculty perspective is active, show selectable faculty identity */}
+            {perspective === 'faculty' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '0.5rem' }}>
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 700 }}>Logged as:</span>
+                <select
+                  className="input"
+                  value={activeFacultyId}
+                  onChange={(e) => setActiveFacultyId(e.target.value)}
+                  style={{ height: '30px', fontSize: '0.75rem', padding: '0 0.5rem' }}
+                >
+                  {SEED_FACULTY.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} ({f.department.split(' ')[0]})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Sync Button */}
@@ -372,151 +470,192 @@ export const InstitutionDashboard: React.FC = () => {
           </button>
         </div>
 
-        {/* Perspective Banner Hint */}
+        {/* Perspective Banner Description */}
         <div
           style={{
-            padding: '0.6rem 1rem',
+            padding: '0.65rem 1rem',
             borderRadius: 'var(--radius-md)',
-            backgroundColor: activePerspective === 'nodal' ? 'rgba(99, 102, 241, 0.08)' : 'rgba(245, 158, 11, 0.08)',
-            border: `1px solid ${activePerspective === 'nodal' ? 'rgba(99, 102, 241, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
+            backgroundColor: perspective === 'nodal' ? 'rgba(99, 102, 241, 0.08)' : 'rgba(245, 158, 11, 0.08)',
+            border: `1px solid ${perspective === 'nodal' ? 'rgba(99, 102, 241, 0.25)' : 'rgba(245, 158, 11, 0.25)'}`,
             fontSize: '0.75rem',
             color: 'var(--text-secondary)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.5rem',
           }}
         >
           <span>
-            {activePerspective === 'nodal' ? (
+            {perspective === 'nodal' ? (
               <>
-                <strong style={{ color: 'var(--accent-indigo)' }}>[Nodal Officer Mode]: </strong>
-                Reviewing incoming matched challenges, checking institutional capabilities, accepting/declining evaluations, and routing to departments.
+                <strong style={{ color: 'var(--accent-indigo)' }}>[HEI Nodal Officer Perspective]: </strong>
+                SELECT → ACCEPT → ALLOCATE → OVERSEE. Institutional oversight of matched innovation challenges, department & faculty allocation, and university capstone pipeline.
               </>
             ) : (
               <>
-                <strong style={{ color: 'var(--accent-amber)' }}>[Faculty & Research Lead Mode]: </strong>
-                Evaluating technical feasibility, assembling student research teams (with APAAR IDs), preparing proposals, and updating project deliverables.
+                <strong style={{ color: 'var(--accent-amber)' }}>[Faculty / Research Lead Perspective ({activeFaculty.name})]: </strong>
+                EVALUATE → RESEARCH → BUILD → TEST → PROVE. Feasibility analysis, research team assembly, proposal drafting, and project execution.
               </>
             )}
           </span>
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>BIT Mesra Node</span>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>BIT Mesra Institutional Node</span>
         </div>
 
-        {/* Render Tab Content */}
-        {activeTab === 'overview' && (
-          <HEIOverviewTab
-            reports={reports}
-            heiChallenges={heiChallenges}
-            evaluatedChallenges={evaluatedChallenges}
-            heiProjects={heiProjects}
-            proposals={proposals}
-            prototypes={prototypes}
-            impactRecords={impactRecords}
-            activeInstitution={ACTIVE_INSTITUTION}
-            onOpenChallengeDetail={setSelectedChallengeForDetail}
-            onNavigateTab={setActiveTab}
-            onDeclineChallenge={handleDeclineChallenge}
-          />
+        {/* NODAL TABS */}
+        {perspective === 'nodal' && (
+          <>
+            {activeTab === 'overview' && (
+              <HEIOverviewTab
+                reports={reports}
+                heiChallenges={heiChallenges}
+                evaluatedChallenges={evaluatedChallenges}
+                heiProjects={heiProjects}
+                proposals={proposals}
+                prototypes={SEED_PROTOTYPES}
+                impactRecords={SEED_IMPACT_OUTCOMES}
+                activeInstitution={ACTIVE_INSTITUTION}
+                onOpenChallengeDetail={setSelectedChallengeForDetail}
+                onNavigateTab={setActiveTab}
+                onDeclineChallenge={handleDeclineChallenge}
+              />
+            )}
+
+            {activeTab === 'matched_challenges' && (
+              <HEIChallengesTab
+                challenges={heiChallenges}
+                reports={reports}
+                onOpenChallengeDetail={setSelectedChallengeForDetail}
+                onAcceptEvaluation={handleAcceptEvaluation}
+                onDeclineChallenge={handleDeclineChallenge}
+                onDraftProposal={handleDraftProposal}
+              />
+            )}
+
+            {activeTab === 'accepted_assignment' && (
+              <HEIAcceptedAssignmentTab
+                evaluatedChallenges={evaluatedChallenges}
+                activeInstitution={ACTIVE_INSTITUTION}
+                onAssignFaculty={handleAssignFaculty}
+                onNavigateTab={setActiveTab}
+              />
+            )}
+
+            {activeTab === 'proposals' && (
+              <HEIProposalsTab
+                proposals={proposals}
+                perspective="nodal"
+                onOpenNewProposalModal={() => {
+                  setProposalTargetChallenge(null);
+                  setIsNewProposalModalOpen(true);
+                }}
+                onApproveProposal={handleApproveProposal}
+                onRequestRevision={handleRequestRevision}
+              />
+            )}
+
+            {activeTab === 'projects' && (
+              <HEIActiveProjectsTab
+                projects={heiProjects}
+                onOpenProjectDetail={(p) => setSelectedProjectForDetail(p)}
+                onOpenMilestoneModal={(project, milestone) => setMilestoneTarget({ project, milestone })}
+                onOpenNEPCertificateModal={handleIssueNEPCertificate}
+                onNavigateTab={setActiveTab}
+              />
+            )}
+
+            {activeTab === 'institution' && (
+              <HEICapabilitiesTab activeInstitution={ACTIVE_INSTITUTION} />
+            )}
+
+            {activeTab === 'analytics' && (
+              <HEIAnalyticsTab activeInstitution={ACTIVE_INSTITUTION} />
+            )}
+          </>
         )}
 
-        {activeTab === 'challenges' && (
-          <HEIChallengesTab
-            challenges={heiChallenges}
-            reports={reports}
-            onOpenChallengeDetail={setSelectedChallengeForDetail}
-            onAcceptEvaluation={handleAcceptEvaluation}
-            onDeclineChallenge={handleDeclineChallenge}
-            onDraftProposal={handleDraftProposal}
-          />
-        )}
+        {/* FACULTY TABS */}
+        {perspective === 'faculty' && (
+          <>
+            {activeTab === 'workbench' && (
+              <HEIFacultyWorkbenchTab
+                activeFaculty={activeFaculty}
+                assignedChallenges={assignedChallengesForFaculty}
+                facultyProposals={proposalsForFaculty}
+                facultyProjects={projectsForFaculty}
+                onNavigateTab={setActiveTab}
+                onOpenProjectDetail={(p) => setSelectedProjectForDetail(p)}
+                onStartFeasibility={() => {
+                  setActiveTab('feasibility');
+                }}
+              />
+            )}
 
-        {activeTab === 'evaluation' && (
-          <HEIEvaluationTab
-            evaluatedChallenges={evaluatedChallenges}
-            onUpdateFeasibility={handleUpdateFeasibility}
-            onAddStudentToTeam={handleAddStudentToTeam}
-            onDraftProposal={handleDraftProposal}
-          />
-        )}
+            {activeTab === 'assigned_challenges' && (
+              <HEIFacultyAssignedChallengesTab
+                activeFaculty={activeFaculty}
+                assignedChallenges={assignedChallengesForFaculty}
+                onOpenChallengeDetail={setSelectedChallengeForDetail}
+                onStartFeasibility={() => {
+                  setActiveTab('feasibility');
+                }}
+              />
+            )}
 
-        {activeTab === 'capabilities' && (
-          <HEICapabilitiesTab activeInstitution={ACTIVE_INSTITUTION} />
-        )}
+            {activeTab === 'feasibility' && (
+              <HEIFeasibilityTab
+                activeFaculty={activeFaculty}
+                assignedChallenges={assignedChallengesForFaculty}
+                onUpdateFeasibility={handleUpdateFeasibility}
+                onNavigateTab={setActiveTab}
+              />
+            )}
 
-        {activeTab === 'faculty_teams' && (
-          <HEIFacultyTeamsTab
-            facultyList={SEED_FACULTY}
-            studentList={SEED_STUDENT_RESEARCHERS}
-          />
-        )}
+            {activeTab === 'teams' && (
+              <HEIResearchTeamsTab
+                activeFaculty={activeFaculty}
+                assignedChallenges={assignedChallengesForFaculty}
+                onAddStudentToTeam={handleAddStudentToTeam}
+                onDraftProposal={handleDraftProposal}
+              />
+            )}
 
-        {activeTab === 'proposals' && (
-          <HEIProposalsTab
-            proposals={proposals}
-            onOpenNewProposalModal={() => {
-              setProposalTargetChallenge(null);
-              setIsNewProposalModalOpen(true);
-            }}
-          />
-        )}
+            {activeTab === 'proposals' && (
+              <HEIProposalsTab
+                proposals={proposalsForFaculty}
+                perspective="faculty"
+                onOpenNewProposalModal={() => {
+                  setProposalTargetChallenge(null);
+                  setIsNewProposalModalOpen(true);
+                }}
+              />
+            )}
 
-        {activeTab === 'projects' && (
-          <HEIActiveProjectsTab
-            projects={heiProjects}
-            onOpenMilestoneModal={(project, milestone) => setMilestoneTarget({ project, milestone })}
-            onOpenNEPCertificateModal={handleIssueNEPCertificate}
-            onNavigateTab={setActiveTab}
-          />
-        )}
-
-        {activeTab === 'milestones' && (
-          <HEIMilestonesTab
-            projects={heiProjects}
-            onOpenMilestoneModal={(project, milestone) => setMilestoneTarget({ project, milestone })}
-          />
-        )}
-
-        {activeTab === 'prototype' && (
-          <HEIPrototypeTab prototypes={prototypes} />
-        )}
-
-        {activeTab === 'industry' && (
-          <HEIIndustryTab industryCollabs={SEED_INDUSTRY_COLLABS} />
-        )}
-
-        {activeTab === 'pilots' && (
-          <HEIPilotsTab pilots={SEED_IMPACT_OUTCOMES.map((o) => ({
-            id: `pilot_${o.id}`,
-            title: o.projectTitle,
-            domain: o.domain,
-            district: o.district,
-            community: o.communityLocation,
-            leadInstitution: 'BIT Mesra',
-            durationMonths: o.pilotDurationMonths,
-            currentMonth: o.pilotDurationMonths,
-            devicesDeployed: 4,
-            householdsBenefited: o.benefitedHouseholds,
-            status: 'active',
-            technicalPerformance: 94,
-            problemReductionPct: Math.abs(o.percentageImprovement[0]?.changePct || 85),
-            communitySatisfactionPct: Math.round(o.citizenVerificationRating * 20),
-            keyMetricName: o.beforeMetrics[0]?.metricName || 'Primary Problem Index',
-            keyMetricValue: o.afterMetrics[0]?.value || '4.2',
-            keyMetricBaseline: o.beforeMetrics[0]?.value || '48.5',
-            notes: o.citizenFeedbackSummary,
-            deploymentDate: o.completedDate,
-          }))} />
-        )}
-
-        {activeTab === 'impact' && (
-          <HEIImpactTab
-            impactRecords={impactRecords}
-            nepCredits={nepCredits}
-          />
+            {activeTab === 'my_projects' && (
+              <HEIFacultyProjectsTab
+                activeFaculty={activeFaculty}
+                facultyProjects={projectsForFaculty}
+                onOpenProjectDetail={(p) => setSelectedProjectForDetail(p)}
+                onNavigateTab={setActiveTab}
+              />
+            )}
+          </>
         )}
       </main>
 
-      {/* 3. Modals */}
+      {/* 3. MODALS */}
+      {/* Project Detail Modal (Unified 9-section workspace) */}
+      {selectedProjectForDetail && (
+        <ProjectDetailModal
+          project={selectedProjectForDetail}
+          perspective={perspective}
+          onClose={() => setSelectedProjectForDetail(null)}
+          onUpdateMilestone={(project, milestone) => setMilestoneTarget({ project, milestone })}
+          onIssueNEPCertificate={handleIssueNEPCertificate}
+        />
+      )}
+
+      {/* Challenge Detail Modal */}
       {selectedChallengeForDetail && (
         <HEIChallengeDetailModal
           challenge={selectedChallengeForDetail}
@@ -528,6 +667,7 @@ export const InstitutionDashboard: React.FC = () => {
         />
       )}
 
+      {/* Claim Challenge Modal */}
       {claimTargetChallenge && (
         <ClaimChallengeModal
           challenge={claimTargetChallenge}
@@ -537,6 +677,7 @@ export const InstitutionDashboard: React.FC = () => {
         />
       )}
 
+      {/* Proposal Draft Modal */}
       {isNewProposalModalOpen && (
         <HEIProposalModal
           challenge={proposalTargetChallenge}
@@ -548,6 +689,7 @@ export const InstitutionDashboard: React.FC = () => {
         />
       )}
 
+      {/* Milestone Update Modal */}
       {milestoneTarget && (
         <MilestoneUpdateModal
           project={milestoneTarget.project}
@@ -558,6 +700,7 @@ export const InstitutionDashboard: React.FC = () => {
         />
       )}
 
+      {/* NEP Certificate Modal */}
       {viewCertificate && (
         <NEPCertificateModal
           credit={viewCertificate}

@@ -7,6 +7,7 @@ import type { HEIProject, ProjectMilestone } from '../../../types';
 
 interface HEIActiveProjectsTabProps {
   projects: HEIProject[];
+  onOpenProjectDetail?: (project: HEIProject) => void;
   onOpenMilestoneModal: (project: HEIProject, milestone: ProjectMilestone) => void;
   onOpenNEPCertificateModal: (project: HEIProject) => void;
   onNavigateTab: (tab: any) => void;
@@ -14,6 +15,7 @@ interface HEIActiveProjectsTabProps {
 
 export const HEIActiveProjectsTab: React.FC<HEIActiveProjectsTabProps> = ({
   projects,
+  onOpenProjectDetail,
   onOpenMilestoneModal,
   onOpenNEPCertificateModal,
   onNavigateTab,
@@ -235,15 +237,27 @@ export const HEIActiveProjectsTab: React.FC<HEIActiveProjectsTabProps> = ({
                   ))}
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => onOpenNEPCertificateModal(proj)}
-                  className="btn btn-secondary btn-sm"
-                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78125rem', color: 'var(--accent-amber)', borderColor: 'rgba(245, 158, 11, 0.4)' }}
-                >
-                  <Award size={14} />
-                  <span>Issue NEP Credit Certificate</span>
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {onOpenProjectDetail && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenProjectDetail(proj)}
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '0.78125rem' }}
+                    >
+                      Open Project Workspace
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onOpenNEPCertificateModal(proj)}
+                    className="btn btn-secondary btn-sm"
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78125rem', color: 'var(--accent-amber)', borderColor: 'rgba(245, 158, 11, 0.4)' }}
+                  >
+                    <Award size={14} />
+                    <span>Issue NEP Credit Certificate</span>
+                  </button>
+                </div>
               </div>
             </div>
           );

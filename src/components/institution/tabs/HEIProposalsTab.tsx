@@ -3,22 +3,46 @@ import {
   Plus,
   ChevronDown,
   ChevronUp,
+  CheckCircle2,
 } from 'lucide-react';
-import type { ResearchProposal } from '../heiDataModel';
+import type { ResearchProposal, HEIPerspective } from '../heiDataModel';
 
 interface HEIProposalsTabProps {
   proposals: ResearchProposal[];
+  perspective: HEIPerspective;
   onOpenNewProposalModal: () => void;
+  onApproveProposal?: (proposalId: string) => void;
+  onRequestRevision?: (proposalId: string, notes: string) => void;
 }
 
 export const HEIProposalsTab: React.FC<HEIProposalsTabProps> = ({
   proposals,
+  perspective,
   onOpenNewProposalModal,
+  onApproveProposal,
+  onRequestRevision,
 }) => {
   const [expandedProposalId, setExpandedProposalId] = useState<string | null>(proposals[0]?.id || null);
+  const [revisionNotes, setRevisionNotes] = useState('');
+  const [requestingRevisionId, setRequestingRevisionId] = useState<string | null>(null);
 
   const toggleExpand = (id: string) => {
     setExpandedProposalId(expandedProposalId === id ? null : id);
+  };
+
+  const handleApprove = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onApproveProposal) {
+      onApproveProposal(id);
+    }
+  };
+
+  const handleSendRevision = (id: string) => {
+    if (onRequestRevision && revisionNotes.trim()) {
+      onRequestRevision(id, revisionNotes);
+      setRequestingRevisionId(null);
+      setRevisionNotes('');
+    }
   };
 
   return (
@@ -39,28 +63,33 @@ export const HEIProposalsTab: React.FC<HEIProposalsTabProps> = ({
       >
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>
-            R&D & Capstone Research Proposals
+            {perspective === 'nodal' ? 'Institutional R&D Proposals Board' : 'My Research Proposals & Grant Workbench'}
           </h2>
           <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '0.2rem', margin: 0 }}>
-            Structured engineering proposals submitted for academic evaluation, municipal pilot funding, and CSR sponsorship.
+            {perspective === 'nodal'
+              ? 'Review faculty proposals, evaluate research methodologies & budgets, and approve projects for activation.'
+              : 'Prepare and submit structured capstone engineering proposals for faculty board review and municipal project activation.'}
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onOpenNewProposalModal}
-          className="btn btn-primary btn-sm"
-          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}
-        >
-          <Plus size={14} />
-          <span>Draft New Research Proposal</span>
-        </button>
+        {perspective === 'faculty' && (
+          <button
+            type="button"
+            onClick={onOpenNewProposalModal}
+            className="btn btn-primary btn-sm"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8125rem' }}
+          >
+            <Plus size={14} />
+            <span>Draft New Research Proposal</span>
+          </button>
+        )}
       </div>
 
       {/* 2. Proposals List */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         {proposals.map((prop) => {
           const isExpanded = expandedProposalId === prop.id;
+          const isRequestingRevision = requestingRevisionId === prop.id;
 
           return (
             <div
@@ -114,66 +143,140 @@ export const HEIProposalsTab: React.FC<HEIProposalsTabProps> = ({
                         backgroundColor:
                           prop.status === 'approved'
                             ? 'rgba(16, 185, 129, 0.15)'
-                            : prop.status === 'under_evaluation'
+                            : prop.status === 'submitted' || prop.status === 'under_evaluation'
                             ? 'rgba(245, 158, 11, 0.15)'
-                            : 'rgba(255, 255, 255, 0.1)',
+                            : 'rgba(255, 255, 255, 0.08)',
                         color:
                           prop.status === 'approved'
                             ? '#10b981'
-                            : prop.status === 'under_evaluation'
+                            : prop.status === 'submitted' || prop.status === 'under_evaluation'
                             ? 'var(--accent-amber)'
-                            : 'var(--text-secondary)',
+                            : 'var(--text-muted)',
                       }}
                     >
-                      ● {prop.status.toUpperCase().replace('_', ' ')}
+                      ● {prop.status.replace(/_/g, ' ').toUpperCase()}
                     </span>
                   </div>
 
-                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '0.35rem', marginBottom: '0.15rem' }}>
+                  <h3 style={{ fontSize: '1.05rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '0.35rem', marginBottom: '0.2rem' }}>
                     {prop.title}
                   </h3>
 
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    Faculty Lead: <strong style={{ color: 'var(--text-primary)' }}>{prop.facultyLead.name}</strong> ({prop.department}) • Team: <strong>{prop.studentTeam.length} Student Researchers</strong>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    <span>Faculty Lead: <strong style={{ color: 'var(--accent-indigo)' }}>{prop.facultyLead.name}</strong> ({prop.department})</span>
+                    <span>•</span>
+                    <span>Team: <strong>{prop.studentTeam.length} Student Researchers</strong></span>
+                    <span>•</span>
+                    <span>Budget Requested: <strong style={{ color: '#10b981' }}>₹{prop.budgetRequested.toLocaleString('en-IN')}</strong></span>
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '0.9rem', fontWeight: 900, color: 'var(--accent-indigo)' }}>
-                      ₹{prop.budgetRequested.toLocaleString('en-IN')}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  {/* Nodal Officer Review Actions */}
+                  {perspective === 'nodal' && prop.status !== 'approved' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <button
+                        type="button"
+                        onClick={(e) => handleApprove(prop.id, e)}
+                        className="btn btn-primary btn-xs"
+                        style={{ fontSize: '0.75rem' }}
+                      >
+                        <CheckCircle2 size={13} />
+                        <span>Approve & Activate Project</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRequestingRevisionId(prop.id);
+                        }}
+                        className="btn btn-ghost btn-xs"
+                        style={{ fontSize: '0.75rem', color: 'var(--accent-amber)' }}
+                      >
+                        Request Revision
+                      </button>
                     </div>
-                    <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>
-                      Est. {prop.estimatedDurationMonths} Months
-                    </div>
-                  </div>
-                  {isExpanded ? <ChevronUp size={18} color="var(--text-muted)" /> : <ChevronDown size={18} color="var(--text-muted)" />}
+                  )}
+
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    style={{ padding: '0.35rem', color: 'var(--text-secondary)' }}
+                  >
+                    {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </button>
                 </div>
               </div>
+
+              {/* Nodal Revision Box */}
+              {isRequestingRevision && (
+                <div
+                  style={{
+                    backgroundColor: 'rgba(245, 158, 11, 0.08)',
+                    border: '1px solid rgba(245, 158, 11, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '0.85rem',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.5rem',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-amber)' }}>
+                    Specify Revision Notes for Faculty Lead:
+                  </span>
+                  <textarea
+                    className="input"
+                    rows={2}
+                    placeholder="Enter requested methodology clarification, budget adjustment, or additional lab safety protocols..."
+                    value={revisionNotes}
+                    onChange={(e) => setRevisionNotes(e.target.value)}
+                    style={{ fontSize: '0.78125rem', padding: '0.4rem' }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => setRequestingRevisionId(null)}
+                      className="btn btn-ghost btn-xs"
+                      style={{ fontSize: '0.72rem' }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSendRevision(prop.id)}
+                      className="btn btn-primary btn-xs"
+                      style={{ fontSize: '0.72rem', backgroundColor: 'var(--accent-amber)', color: '#000', border: 'none' }}
+                    >
+                      Submit Revision Request
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Expanded Proposal Details */}
               {isExpanded && (
                 <div
                   style={{
-                    paddingTop: '1rem',
+                    paddingTop: '0.85rem',
                     borderTop: '1px solid var(--border-subtle)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '0.85rem',
-                    animation: 'fadeIn 0.2s ease',
                   }}
                 >
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '0.75rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '0.75rem' }}>
                     <div style={{ backgroundColor: 'var(--bg-elevated)', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Problem Statement & Root Cause</span>
-                      <p style={{ fontSize: '0.78125rem', color: 'var(--text-primary)', marginTop: '0.25rem', lineHeight: 1.45, margin: 0 }}>
+                      <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Civic Problem Statement</span>
+                      <p style={{ fontSize: '0.78125rem', color: 'var(--text-primary)', marginTop: '0.25rem', lineHeight: 1.4, margin: 0 }}>
                         {prop.problemStatement}
                       </p>
                     </div>
 
                     <div style={{ backgroundColor: 'var(--bg-elevated)', padding: '0.85rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
                       <span style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Research Hypothesis</span>
-                      <p style={{ fontSize: '0.78125rem', color: 'var(--text-primary)', marginTop: '0.25rem', lineHeight: 1.45, margin: 0 }}>
+                      <p style={{ fontSize: '0.78125rem', color: 'var(--text-primary)', marginTop: '0.25rem', lineHeight: 1.4, margin: 0 }}>
                         {prop.hypothesis}
                       </p>
                     </div>
